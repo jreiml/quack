@@ -318,11 +318,15 @@ func readPairRecords(homes ...string) ([]pairRecord, error) {
 			return nil, err
 		}
 		for _, path := range paths {
-			if err := ownedPath(path, 0); err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
+			st, err := os.Lstat(path)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
 				return nil, err
+			}
+			if !st.Mode().IsRegular() {
+				continue
 			}
 			raw, err := os.ReadFile(path)
 			if os.IsNotExist(err) {
@@ -332,9 +336,16 @@ func readPairRecords(homes ...string) ([]pairRecord, error) {
 				return nil, err
 			}
 			var r pairRecord
-			if json.Unmarshal(raw, &r) == nil && r.Entrypoint == "quack-pair" {
-				records = append(records, r)
+			if json.Unmarshal(raw, &r) != nil || r.Entrypoint != "quack-pair" {
+				continue
 			}
+			if err := ownedPath(path, 0); err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, err
+			}
+			records = append(records, r)
 		}
 	}
 	return records, nil

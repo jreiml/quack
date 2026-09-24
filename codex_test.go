@@ -165,6 +165,7 @@ func TestNetCodexPair(t *testing.T) {
 		codexHost := kinds.host
 		t.Run(fmt.Sprintf("codex-host-%t-guest-%t", kinds.host, kinds.guest), func(t *testing.T) {
 			root := fakeSetup(t)
+			writeNativeClaudeRecord(t)
 			fakeBin := fakeCodexBinary(t, root)
 			var host, guest fakeClaudeInfo
 			var s server
@@ -359,5 +360,51 @@ func TestCodexInboxRoutingAndLifetime(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("left behind %s: %v", path, err)
 		}
+	}
+}
+
+func writeNativeClaudeRecord(t *testing.T) {
+	t.Helper()
+	if err := os.MkdirAll(claudeSessions(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(claudeSessions(), "27544.json")
+	if err := os.WriteFile(path, []byte(`{"pid":27544,"entrypoint":"cli","status":"idle"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPairRecordsIgnoreNativeClaudePermissions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
+	writeNativeClaudeRecord(t)
+	for _, dir := range []string{claudeSessions(), filepath.Join(codexHome(), "quack-pairs")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "12345.json")
+		if err := exclusiveJSON(path, pairRecord{PID: 12345, Entrypoint: "quack-pair"}); err != nil {
+			t.Fatal(err)
+		}
+		records, err := readPairRecords()
+		if err != nil || len(records) != 1 || records[0].PID != 12345 {
+			t.Fatalf("pair lookup: %+v, %v", records, err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readPairRecords(); err == nil || !strings.Contains(err.Error(), path+" must be private") {
+			t.Fatalf("accepted public quack record: %v", err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := os.Stat(filepath.Join(claudeSessions(), "27544.json"))
+	if err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("native Claude permissions changed: %v, %v", st, err)
 	}
 }
