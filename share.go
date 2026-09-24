@@ -215,6 +215,14 @@ func cmdServe(args []string) {
 	if err := unix.Dup2(int(f.Fd()), 2); err != nil {
 		logger.Fatalf("dup2: %v", err)
 	}
+	notice, err := prepareHostKeyDir()
+	if err != nil {
+		s.set("error", err.Error())
+		logger.Fatalf("%v", err)
+	}
+	if notice != "" {
+		logger.Print(notice)
+	}
 	srv := &tailcat.Server{Logf: logger.Printf}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	ln, err := srv.Listen(ctx, "tcp", ":22")
