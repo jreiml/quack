@@ -33,18 +33,23 @@ func clock(t time.Time) string {
 }
 
 func expireLoop(s server, logger *log.Logger) {
+	hostSeen := false
 	for range time.Tick(5 * time.Second) {
 		if !s.alive() {
 			return
 		}
 		expireInvites(s)
+		if hostAttached(s) {
+			hostSeen = true
+			continue
+		}
 		ask := false
 		for _, i := range invites(s) {
 			if i.Admission == "ask" && i.State == "open" {
 				ask = true
 			}
 		}
-		if s.get("invites_ready") == "" || hostAttached(s) || !ask && (staysAway(s) || len(connections(s)) > 0) {
+		if s.get("invites_ready") == "" || ask && !hostSeen || !ask && (staysAway(s) || len(connections(s)) > 0) {
 			continue
 		}
 		c := exec.Command(quackBin(), "_expire", s.name)
