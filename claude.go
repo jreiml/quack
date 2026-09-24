@@ -330,7 +330,7 @@ func (a claudeEndpoint) send(from, name, text string) error {
 	}
 	frame := localFrame{Type: "user", Version: 1, ID: randomID(), Priority: "next"}
 	frame.Message.Role = "user"
-	frame.Message.Content = fmt.Sprintf("<cross-session-message from=\"uds:%s\" from-name=\"%s\" from-mode=\"bypass\">\n%s\n</cross-session-message>", from, cleanName(name), text)
+	frame.Message.Content = fmt.Sprintf("<cross-session-message from=\"uds:%s\" from-name=\"%s\" from-mode=\"bypass\">\n%s\n</cross-session-message>", from, strings.NewReplacer("\"", "", "<", "", ">", "", "\n", " ", "\r", " ").Replace(name), text)
 	if err := enc.Encode(frame); err != nil {
 		return err
 	}
@@ -355,6 +355,7 @@ type pairRecord struct {
 	Socket     string         `json:"messagingSocketPath"`
 	Claude     claudeEndpoint `json:"quackClaude"`
 	Peer       string         `json:"quackPeer"`
+	Identity   agentIdentity  `json:"quackPeerIdentity"`
 }
 
 type pairInbox struct {
@@ -408,7 +409,7 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 		return nil, err
 	}
 	b := &pairInbox{listener: ln, key: hex.EncodeToString(token), messages: make(chan localFrame, 8), stop: make(chan struct{}), done: make(chan struct{}), logger: logger}
-	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, runtime.GOOS, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, peer}
+	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, runtime.GOOS, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, peer, agentIdentity{}}
 	b.files = append(b.files, path)
 	if err := os.Chmod(path, 0o600); err != nil {
 		b.close()
@@ -434,10 +435,18 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 	return b, nil
 }
 
-func (b *pairInbox) setPeer(peer string) error {
+func (b *pairInbox) setPeer(peer agentIdentity) error {
+	if !peer.valid() {
+		return fmt.Errorf("invalid peer session identity; update quack on both sides")
+	}
+	name, err := b.claimName(peer)
+	if err != nil {
+		return err
+	}
 	record := b.record
-	record.Peer = peer
-	record.Name = "quack-" + strings.ReplaceAll(cleanName(peer), " ", "-") + "-" + strconv.Itoa(record.PID)
+	record.Peer = peer.Owner
+	record.Identity = peer
+	record.Name = name
 	path := filepath.Join(claudeSessions(), strconv.Itoa(record.PID)+".json")
 	tmp := path + ".tmp"
 	if err := exclusiveJSON(tmp, record); err != nil {
@@ -451,6 +460,7 @@ func (b *pairInbox) setPeer(peer string) error {
 	}
 	b.record.Peer = record.Peer
 	b.record.Name = record.Name
+	b.record.Identity = record.Identity
 	return nil
 }
 

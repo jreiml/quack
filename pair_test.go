@@ -180,6 +180,27 @@ func fakeClaude() {
 			}
 		case "send":
 			target := strings.TrimPrefix(command.Address, "uds:")
+			if !filepath.IsAbs(target) {
+				paths, err := filepath.Glob(filepath.Join(claudeSessions(), "*.json"))
+				if err != nil {
+					panic(err)
+				}
+				var matches []string
+				for _, path := range paths {
+					raw, err := os.ReadFile(path)
+					if err != nil {
+						continue
+					}
+					var record pairRecord
+					if json.Unmarshal(raw, &record) == nil && record.Name == target {
+						matches = append(matches, record.Socket)
+					}
+				}
+				if len(matches) != 1 {
+					panic("ambiguous or missing SendMessage name: " + target)
+				}
+				target = matches[0]
+			}
 			peer, err := net.Dial("unix", target)
 			if err != nil {
 				result.Error = err.Error()
@@ -274,7 +295,7 @@ func hasFakeMessage(t *testing.T, f fakeClaudeInfo, text string) bool {
 	return false
 }
 
-var inboxRx = regexp.MustCompile(`exact address (uds:[^\s]+\.sock)`)
+var inboxRx = regexp.MustCompile(`Use SendMessage to "([^"]+)"`)
 
 func fakeInbox(t *testing.T, f fakeClaudeInfo, output string) string {
 	t.Helper()
@@ -288,8 +309,23 @@ func fakeInbox(t *testing.T, f fakeClaudeInfo, output string) string {
 		if len(matches) == 0 {
 			return false
 		}
-		inbox = matches[len(matches)-1][1]
-		return true
+		name := matches[len(matches)-1][1]
+		paths, err := filepath.Glob(filepath.Join(claudeSessions(), "*.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var record pairRecord
+			if json.Unmarshal(raw, &record) == nil && record.Name == name && record.Claude.PID == f.Claude.PID {
+				inbox = "uds:" + record.Socket
+				return true
+			}
+		}
+		return false
 	})
 	return inbox
 }
@@ -466,7 +502,7 @@ func TestNetPair(t *testing.T) {
 		t.Fatalf("wrong waiter: %+v %s", w, result.Output)
 	}
 	status := s.must("show-options", "-gv", "status-left")
-	if !strings.Contains(status, "Claude wants to pair") {
+	if !strings.Contains(status, "wants to pair") {
 		t.Fatal(status)
 	}
 	quack(t, "decline", w.code)
@@ -499,6 +535,40 @@ func TestNetPair(t *testing.T) {
 	}
 	fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "second pair waits", func() bool { return len(waiting(s)) == 1 })
+
+	oldestInbox := fakeInbox(t, guest, result.Output)
+	quack(t, "share", "--auto-approve", "--limit", "2", s.name)
+	other := startFake(t, root, "other")
+	otherResult := fakeCall(t, other, fakeClaudeCommand{Action: "pair", Address: addr})
+	otherInbox := fakeInbox(t, other, otherResult.Output)
+	firstInbox := fakeInbox(t, guest, result.Output)
+	readInbox := func(address string) pairRecord {
+		path := strings.TrimPrefix(address, "uds:")
+		raw, err := os.ReadFile(filepath.Join(claudeSessions(), strings.TrimSuffix(filepath.Base(path), ".sock")+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record pairRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	firstRecord, otherRecord := readInbox(firstInbox), readInbox(otherInbox)
+	if firstRecord.Identity != otherRecord.Identity {
+		t.Fatalf("host changed identity between guests: %+v %+v", firstRecord.Identity, otherRecord.Identity)
+	}
+	if firstRecord.Name == otherRecord.Name {
+		t.Fatal("local inbox aliases collide")
+	}
+	fakeCall(t, other, fakeClaudeCommand{Action: "send", Address: otherRecord.Name, Text: "message-from-other-session"})
+	eventually(t, "named message from second guest", func() bool { return hasFakeMessage(t, host, "message-from-other-session") })
+	oldestRecord := readInbox(oldestInbox)
+	fakeCall(t, guest, fakeClaudeCommand{Action: "unpair", Address: oldestRecord.Name})
+	eventually(t, "only the selected pairing ends", func() bool { return len(pairs(s)) == 2 })
+	fakeCall(t, other, fakeClaudeCommand{Action: "send", Address: otherRecord.Name, Text: "other-session-still-paired"})
+	eventually(t, "other Claude remains paired", func() bool { return hasFakeMessage(t, host, "other-session-still-paired") })
+
 	quack(t, "unshare", s.name)
 	eventually(t, "unshare cleanup", func() bool { return len(pairs(s)) == 0 && hasFakeMessage(t, guest, "The host stopped sharing.") })
 	eventually(t, "all pair records removed", func() bool {
@@ -516,7 +586,11 @@ func TestNetPair(t *testing.T) {
 				return false
 			}
 		}
-		return true
+		claims, err := filepath.Glob(filepath.Join(claudeSessions(), ".quack-*.claim"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(claims) == 0
 	})
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".config", "quack", "keys")); !os.IsNotExist(err) {
 		t.Fatal("pair saved a tunnel key")
@@ -591,7 +665,7 @@ func TestPairDeclineGate(t *testing.T) {
 	defer c.Process.Kill()
 	p := newPairWire(out, in)
 	defer close(p.done)
-	if err := p.send(pairFrame{Type: "hello", Version: 1}); err != nil {
+	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &agentIdentity{strings.Repeat("a", 64), "brave-otter-123456", "Ada Lovelace"}}); err != nil {
 		t.Fatal(err)
 	}
 	select {

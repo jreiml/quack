@@ -40,8 +40,8 @@ Pair your Claude (inside Claude): ! quack pair tc…
 ```
 
 Ada Lovelace pastes `! quack pair tc…` into Claude's shell mode. This authorizes
-receiving messages on Ada's side. The host sees **Let Ada Lovelace's Claude in
-(tiger-lamp)** in Ctrl-Q, with a reminder that approving lets that peer's
+receiving messages on Ada's side. The host sees
+**Let brave-otter-482731 (Ada Lovelace) in (tiger-lamp)** in Ctrl-Q, with a reminder that approving lets that peer's
 messages reach Claude without asking again. Check the code before allowing.
 `quack allow` and `quack decline` work too. The same next-one/anyone settings
 and limits apply to both terminal guests and pairs: a pairing consumes one
@@ -52,19 +52,38 @@ it prints a prompt explaining who Claude is paired with and how to send a
 message. Otherwise it prints the code and returns; a background process tells
 Claude when approval happens or connecting fails. No skill or plugin is needed.
 The host's Claude also gets a pairing prompt. Both use native `SendMessage` to
-the local inbox address in that prompt; only those messages cross the link.
+the inbox name in that prompt; only those messages cross the link.
 Conversation history and files are not shared.
 
-The host's bar shows `🤖 Ada Lovelace`, or `✋ Ada Lovelace's Claude wants to pair
-(code tiger-lamp)` while waiting. `quack ls` counts active pairs. Each bridge
-also appears as `quack-<peer>-<pid>` in Claude's `ListAgents`.
+Each live Claude session has a name such as `brave-otter-482731`, displayed as
+`brave-otter-482731 (Ada Lovelace)`. It reuses the quack session name when there
+is one; standalone Claudes get an adjective-animal name. Six digits derived
+from a hash of the inbox's random token and process identity reduce collisions
+without revealing that token. The name stays the same across pairings and
+reconnections to that live session, including when several peers connect to
+it. Restarting Claude gives it a new identity. The approval code remains
+separate, and neither a session name nor an owner label verifies a person.
 
-Run `quack unpair` inside Claude to end its pairings, or `quack unpair "Ada Lovelace"` from a terminal to select a peer. The `quack-<peer>-<pid>` inbox name
-also selects an individual pairing. Stopping sharing, its expiry, host detach
-in ask-first mode, or either Claude exiting ends the pairing. The surviving
+Pairing notices and incoming messages use the same display name. The prompt
+asks Claude to use `SendMessage` with the inbox name, also visible in
+`ListAgents`. If that name is already in use locally (for example, two Claudes
+on one machine pairing with the same remote session), the local inbox alias
+gets another six-digit suffix. The remote session's identity and display name
+stay the same. Always use the exact inbox name from your pairing prompt.
+
+The host's bar shows `🤖 brave-otter-482731 (Ada Lovelace)` and names waiting
+sessions alongside their approval code. `quack ls` counts active pairs.
+
+Run `quack unpair` inside Claude to end its pairings, or
+`quack unpair brave-otter-482731` to select a session. You can also select an
+owner with `quack unpair "Ada Lovelace"`, or an exact local inbox alias.
+Stopping sharing, its expiry, host detach in ask-first mode, or either Claude exiting ends the pairing. The surviving
 Claude gets an ending notice. Each direction allows 30 messages per rolling
 10 minutes, with a notice to the sender when the cap drops a message. Messages
 are limited to 32 KiB of text; attachments and delivery receipts are not bridged.
+
+Both peers need this version of quack for named pairing (pair protocol 2).
+End an existing pairing and pair again after updating to use the new names.
 
 Pairing uses Claude Code's internal local messaging protocol, inspected in
 2.1.281 on macOS, and requires a live messaging socket and key file. The host
@@ -78,8 +97,8 @@ observable, so the menu warns about this limitation instead of claiming to
 detect mode differences.
 
 Pair tunnel keys exist only in memory. Normal shutdown removes the bridge's
-socket, local authentication key, Claude registry entry and temporary
-`$TMPDIR/quack/pair-<pid>.log` diagnostic log. A forced kill or
+socket, local authentication key, Claude registry entry, inbox-name claim
+and temporary `$TMPDIR/quack/pair-<pid>.log` diagnostic log. A forced kill or
 machine crash cannot run cleanup; these files contain no message history.
 
 ## The status bar

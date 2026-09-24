@@ -25,12 +25,15 @@ import (
 	"tailscale.com/types/logger"
 )
 
+const pairProtocol = 2
+
 type pairFrame struct {
-	Type    string `json:"type"`
-	Version int    `json:"version,omitempty"`
-	Name    string `json:"name,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Text    string `json:"text,omitempty"`
+	Identity *agentIdentity `json:"identity,omitempty"`
+	Type     string         `json:"type"`
+	Version  int            `json:"version,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	ID       string         `json:"id,omitempty"`
+	Text     string         `json:"text,omitempty"`
 }
 
 type pairWire struct {
@@ -100,12 +103,17 @@ func (r *pairRate) take(now time.Time) bool {
 	return true
 }
 
-func pairPrompt(peer, inbox string) string {
-	return fmt.Sprintf("You are paired with %s's Claude through quack. To message them, use SendMessage to the exact address uds:%s. Send only messages you intend to share; don't reply just to acknowledge a message. Each direction allows 30 messages per 10 minutes. Run quack unpair to end the pairing. It also ends when sharing stops or expires, the host detaches in ask-first mode, or either Claude exits. Messages declare bypass; a prompting-mode Claude may hold them. No reply to this notice is needed.", peer, inbox)
+func pairPrompt(b *pairInbox) string {
+	peer := b.record.Identity
+	return fmt.Sprintf("You’re paired with %s, a Claude session belonging to %s. Use SendMessage to %q to message it. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends. No reply needed.", peer.Name, peer.Owner, b.record.Name, b.record.Name)
 }
 
 func pairNotice(b *pairInbox, peer, text string) {
-	if err := b.record.Claude.send(b.record.Socket, "quack", text); err != nil {
+	name := "quack"
+	if b.record.Identity.valid() {
+		name = b.record.Identity.label()
+	}
+	if err := b.record.Claude.send(b.record.Socket, name, text); err != nil {
 		b.logger.Printf("pair notice to %s: %v", peer, err)
 	}
 }
@@ -188,7 +196,7 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 					seen = map[string]bool{}
 				}
 				seen["in:"+f.ID] = true
-				if err := b.record.Claude.send(b.record.Socket, peer+"'s Claude via quack", f.Text); err != nil {
+				if err := b.record.Claude.send(b.record.Socket, b.record.Identity.label(), f.Text); err != nil {
 					b.logger.Printf("pair delivery: %v", err)
 					return "The peer's Claude became unavailable."
 				}
@@ -200,10 +208,11 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 }
 
 type pairConfig struct {
-	Addr   string          `json:"addr"`
-	Key    key.NodePrivate `json:"key"`
-	Claude claudeEndpoint  `json:"claude"`
-	Name   string          `json:"name"`
+	Identity agentIdentity   `json:"identity"`
+	Addr     string          `json:"addr"`
+	Key      key.NodePrivate `json:"key"`
+	Claude   claudeEndpoint  `json:"claude"`
+	Name     string          `json:"name"`
 }
 
 func cmdPair(args []string) {
@@ -211,6 +220,10 @@ func cmdPair(args []string) {
 	a, err := callerClaude()
 	if err != nil {
 		fatalf("%v", err)
+	}
+	identity, err := sessionIdentity(a, displayName())
+	if err != nil {
+		fatalf("pair identity: %v", err)
 	}
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
@@ -235,7 +248,7 @@ func cmdPair(args []string) {
 	}
 	childFile.Close()
 	go c.Wait()
-	cfg := pairConfig{addr, key.NewNode(), a, cleanName(displayName())}
+	cfg := pairConfig{identity, addr, key.NewNode(), a, identity.Owner}
 	if err := json.NewEncoder(control).Encode(cfg); err != nil {
 		fatalf("starting pair: %v", err)
 	}
@@ -382,7 +395,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 	go keepalive(client)
 	p := newPairWire(out, in)
 	defer close(p.done)
-	if err := p.send(pairFrame{Type: "hello", Version: 1}); err != nil {
+	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &cfg.Identity}); err != nil {
 		return fail(err)
 	}
 	tick := time.NewTicker(2 * time.Second)
@@ -405,11 +418,14 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 			case "bye":
 				return fail(fmt.Errorf("%s", f.Text))
 			case "ready":
-				peer := cleanName(f.Name)
-				if err := b.setPeer(peer); err != nil {
+				if f.Version != pairProtocol || f.Identity == nil {
+					return fail(fmt.Errorf("unsupported pairing protocol; update quack on both sides"))
+				}
+				peer := f.Identity.Owner
+				if err := b.setPeer(*f.Identity); err != nil {
 					return fail(err)
 				}
-				prompt := pairPrompt(peer, b.record.Socket)
+				prompt := pairPrompt(b)
 				if !report(pairFrame{Type: "ready", Text: prompt}) {
 					pairNotice(b, peer, prompt)
 				}
@@ -437,12 +453,14 @@ func pairGate(s server, pub, who string) {
 			logger.Printf("pair goodbye: %v", err)
 		}
 	}
+	var peer agentIdentity
 	select {
 	case f := <-p.in:
-		if f.Type != "hello" || f.Version != 1 {
-			goodbye("Unsupported pairing protocol.")
+		if f.Type != "hello" || f.Version != pairProtocol || f.Identity == nil || !f.Identity.valid() || f.Identity.Owner != who {
+			goodbye("Unsupported pairing protocol; update quack on both sides.")
 			return
 		}
+		peer = *f.Identity
 	case <-ctx.Done():
 		return
 	case <-time.After(10 * time.Second):
@@ -456,13 +474,18 @@ func pairGate(s server, pub, who string) {
 		goodbye(err.Error())
 		return
 	}
+	identity, err := sessionIdentity(a, s.get("host"))
+	if err != nil {
+		goodbye(err.Error())
+		return
+	}
 	b, err := newPairInbox(a, who, logger)
 	if err != nil {
 		goodbye(err.Error())
 		return
 	}
 	defer b.close()
-	if err := b.setPeer(who); err != nil {
+	if err := b.setPeer(peer); err != nil {
 		goodbye(err.Error())
 		return
 	}
@@ -483,13 +506,13 @@ func pairGate(s server, pub, who string) {
 		}
 		refreshStatus(s)
 	}()
-	s.set(active, who+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|waiting")
+	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|waiting")
 	unlock := lockShare(s)
 	admitted := autoTake(s)
 	if admitted {
-		s.set("ok_"+id, who+"'s Claude")
+		s.set("ok_"+id, peer.label())
 	} else {
-		s.set("wait_"+id, code+"|"+who+"'s Claude|pair")
+		s.set("wait_"+id, code+"|"+peer.label()+"|pair")
 	}
 	unlock()
 	if !admitted {
@@ -540,14 +563,14 @@ func pairGate(s server, pub, who string) {
 		goodbye("The host stopped sharing.")
 		return
 	}
-	s.set(active, who+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|active")
+	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|active")
 	refreshStatus(s)
-	if err := p.send(pairFrame{Type: "ready", Name: s.get("host")}); err != nil {
+	if err := p.send(pairFrame{Type: "ready", Version: pairProtocol, Identity: &identity}); err != nil {
 		logger.Printf("pair ready: %v", err)
 		return
 	}
 	logger.Printf("%s's Claude (%s) paired", who, code)
-	pairNotice(b, who, pairPrompt(who, b.record.Socket))
+	pairNotice(b, who, pairPrompt(b))
 	until, expires := awayUntil(s)
 	reason = bridgePair(ctx, b, p, who, func() string {
 		if !s.alive() {
@@ -601,12 +624,13 @@ func cmdUnpair(args []string) {
 		if r.Entrypoint != "quack-pair" {
 			continue
 		}
+		if callerErr == nil && r.Claude.PID != caller.PID {
+			continue
+		}
 		if len(args) == 1 {
-			if args[0] != r.Name && args[0] != r.Peer {
+			if args[0] != r.Name && args[0] != r.Peer && args[0] != r.Identity.Name {
 				continue
 			}
-		} else if callerErr == nil && r.Claude.PID != caller.PID {
-			continue
 		}
 		a := claudeEndpoint{r.PID, r.Socket, r.Start}
 		c, err := a.connect()
@@ -615,6 +639,17 @@ func cmdUnpair(args []string) {
 		}
 		c.Close()
 		records = append(records, r)
+	}
+	if len(args) == 1 {
+		var exact []pairRecord
+		for _, r := range records {
+			if r.Name == args[0] {
+				exact = append(exact, r)
+			}
+		}
+		if len(exact) > 0 {
+			records = exact
+		}
 	}
 	if len(records) == 0 {
 		fatalf("no matching pairing")
