@@ -110,13 +110,22 @@ func TestInputFilter(t *testing.T) {
 	step("\x11", "", false)
 	step("a", "\x11a", false)
 	step("\x1b[A", "\x1b[A", false)
+	step("\x1b[57442;5u", "\x1b[57442;5u", false)
+	step("\x1b[97;1:3u", "\x1b[97;1:3u", false)
 	step("\x1b[113;5u", "", false)
 	step("\x1b[113;5:3u", "", false)
 	step("q", "", true)
 }
 
 func TestInputFilterCtrlQQInOneRead(t *testing.T) {
-	for _, in := range []string{"\x11q", "\x1b[113;5uq", "\x1b[27;5;113~q", "\x1b[113;5u\x1b[113u"} {
+	for _, in := range []string{
+		"\x11q",
+		"\x1b[113;5uq",
+		"\x1b[27;5;113~q",
+		"\x1b[113;5u\x1b[113u",
+		"\x1b[57442;5u\x1b[113;5:1u\x1b[113;5:3u\x1b[57442;5:3uq",
+		"\x1b[57442;5u\x1b[113;5u\x1b[57442;1:3u\x1b[113;1:1u\x1b[113;1:3u",
+	} {
 		f := &inputFilter{now: time.Now}
 		if _, quit := f.feed([]byte(in)); !quit {
 			t.Errorf("%q did not quit", in)

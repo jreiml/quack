@@ -190,6 +190,7 @@ const (
 	keyCtrlQ
 	keyQ
 	keyRelease
+	keyNoise
 )
 
 const cancelEvery = 3 * time.Second
@@ -200,7 +201,10 @@ func classify(code, mods, event int) keyKind {
 		case 'c', 'd', 'q':
 			return keyRelease
 		}
-		return keyOther
+		return keyNoise
+	}
+	if code >= 57441 && code <= 57452 {
+		return keyNoise
 	}
 	m := mods - 1
 	if m < 0 {
@@ -289,7 +293,7 @@ func (f *inputFilter) feed(b []byte) ([]byte, bool) {
 			if k == keyQ {
 				return out, true
 			}
-			if k == keyRelease {
+			if k == keyRelease || k == keyNoise {
 				continue
 			}
 			out = append(out, f.pendingQ...)
