@@ -126,9 +126,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	bin = filepath.Join(dir, "quack")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		panic(string(out))
+	bin = os.Getenv("QUACK_TEST_BIN")
+	if bin == "" {
+		bin = filepath.Join(dir, "quack")
+		if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+			panic(string(out))
+		}
 	}
 	os.Setenv("TMUX_TMPDIR", dir)
 	os.Unsetenv("QUACK_SESSION")

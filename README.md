@@ -133,7 +133,7 @@ Old links containing only a `tc…` address are no longer accepted; create a new
 invite to get a link with an invite ID.
 
 Pairing uses Claude Code's internal local messaging protocol, inspected in
-2.1.281 on macOS, and requires a live messaging socket and key file. The host
+2.1.281 on macOS and Linux, and requires a live messaging socket and key file. The host
 must have exactly one Claude inbox under the shared tmux window; the guest is
 identified from the calling Claude process. The bridge declares
 `from-mode="bypass"`, matching quack's default Claude launch. This does not change

@@ -50,7 +50,45 @@ func claudeSessions() string {
 	return filepath.Join(root, "sessions")
 }
 
+func linuxProcessStart(stat string) (string, error) {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return "", fmt.Errorf("invalid Linux process stat")
+	}
+	fields := strings.Fields(stat[end+1:])
+	if len(fields) < 20 {
+		return "", fmt.Errorf("Linux process stat has no start time")
+	}
+	start := fields[19]
+	if _, err := strconv.ParseUint(start, 10, 64); err != nil {
+		return "", fmt.Errorf("invalid Linux process start time: %w", err)
+	}
+	return start, nil
+}
+
+func processDomain() (string, error) {
+	if runtime.GOOS != "linux" {
+		return runtime.GOOS, nil
+	}
+	machine, err := os.ReadFile("/etc/machine-id")
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	namespace, err := os.Readlink("/proc/self/ns/pid")
+	if err != nil {
+		return "", err
+	}
+	return "linux:" + strings.TrimSpace(string(machine)) + ":" + namespace, nil
+}
+
 func processStart(pid int) (string, error) {
+	if runtime.GOOS == "linux" {
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			return "", err
+		}
+		return linuxProcessStart(string(stat))
+	}
 	c := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
 	c.Env = append(os.Environ(), "LC_ALL=C", "TZ=UTC")
 	b, err := c.Output()
@@ -305,7 +343,11 @@ func (a claudeEndpoint) token() (string, error) {
 	if err := json.Unmarshal(b, &k); err != nil {
 		return "", err
 	}
-	if k.Token == "" || k.Start != a.Start {
+	domain, err := processDomain()
+	if err != nil {
+		return "", err
+	}
+	if k.Token == "" || k.Start != a.Start || k.Domain != domain {
 		return "", fmt.Errorf("Claude key no longer matches its process")
 	}
 	return k.Token, nil
@@ -387,6 +429,10 @@ func exclusiveJSON(path string, v any) error {
 }
 
 func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox, error) {
+	domain, err := processDomain()
+	if err != nil {
+		return nil, err
+	}
 	start, err := processStart(os.Getpid())
 	if err != nil {
 		return nil, err
@@ -409,7 +455,7 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 		return nil, err
 	}
 	b := &pairInbox{listener: ln, key: hex.EncodeToString(token), messages: make(chan localFrame, 8), stop: make(chan struct{}), done: make(chan struct{}), logger: logger}
-	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, runtime.GOOS, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, peer, agentIdentity{}}
+	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, domain, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, peer, agentIdentity{}}
 	b.files = append(b.files, path)
 	if err := os.Chmod(path, 0o600); err != nil {
 		b.close()
@@ -420,7 +466,7 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 		return nil, err
 	}
 	keyPath := claudeKeyPath(os.Getpid(), path)
-	if err := exclusiveJSON(keyPath, claudeKey{b.key, start, runtime.GOOS}); err != nil {
+	if err := exclusiveJSON(keyPath, claudeKey{b.key, start, domain}); err != nil {
 		b.close()
 		return nil, err
 	}

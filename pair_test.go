@@ -102,7 +102,11 @@ func fakeClaude() {
 	a := claudeEndpoint{pid, path, start}
 	keyPath := claudeKeyPath(pid, path)
 	token := strings.Repeat("a", 32)
-	if err := exclusiveJSON(keyPath, claudeKey{token, start, "darwin"}); err != nil {
+	domain, err := processDomain()
+	if err != nil {
+		panic(err)
+	}
+	if err := exclusiveJSON(keyPath, claudeKey{token, start, domain}); err != nil {
 		panic(err)
 	}
 	registry := filepath.Join(claudeSessions(), strconv.Itoa(pid)+".json")
