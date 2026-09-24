@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -81,7 +80,7 @@ func guests(s server) []entry {
 		if err != nil {
 			continue
 		}
-		out = append(out, entry{s: s, hex: f[0], invite: s.get("member_" + f[0]), name: f[1], code: f[2], tty: "/dev/" + id, pid: pid})
+		out = append(out, entry{s: s, hex: f[0], invite: s.get("member_" + f[0]), name: f[1], code: f[2], tty: guestTTY(id), pid: pid})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].name < out[b].name })
 	return out
@@ -167,6 +166,14 @@ func notify(msg string) error {
 	}
 	go c.Wait()
 	return nil
+}
+
+func guestID(tty string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(tty, "/dev/"), "/", "_")
+}
+
+func guestTTY(id string) string {
+	return "/dev/" + strings.ReplaceAll(id, "_", "/")
 }
 
 func ttyName() string {
@@ -268,7 +275,7 @@ func cmdGate(args []string) {
 		}
 	}
 
-	id := filepath.Base(ttyName())
+	id := guestID(ttyName())
 	s.set("guest_"+id, hex+"|"+who+"|"+code+"|"+strconv.Itoa(os.Getpid()))
 	refreshStatus(s)
 	logger.Printf("%s (%s) joined on %s", who, code, id)

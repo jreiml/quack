@@ -338,7 +338,7 @@ func pruneInvitesLocked(s server) bool {
 		}
 		for key, value := range s.opts("guest_") {
 			if strings.HasPrefix(value, id+"|") {
-				disconnectEntry(entry{s: s, hex: id, tty: "/dev/" + key}, "The guest connection ended.")
+				disconnectEntry(entry{s: s, hex: id, tty: guestTTY(key)}, "The guest connection ended.")
 				s.unset("guest_" + key)
 			}
 		}
