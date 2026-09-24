@@ -84,6 +84,8 @@ func main() {
 		cmdGate(args)
 	case "_menu":
 		cmdMenu(args)
+	case "_invite-command":
+		cmdInviteCommand(args)
 	case "_act":
 		cmdAct(args)
 	case "_fit":

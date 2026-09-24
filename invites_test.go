@@ -117,6 +117,7 @@ func TestNetInviteIsolation(t *testing.T) {
 		t.Skip("set QUACK_NET_TEST=1 for tailcat invites")
 	}
 	root := fakeSetup(t)
+	t.Setenv("SSH_CONNECTION", "test")
 	s := server{quack(t, "new", "-n", "t-isolation", "--", "env", "QUACK_PAIR_HELPER=1", "QUACK_PAIR_LABEL=host", os.Args[0])}
 	defer s.run("kill-server")
 	host := fakeInfo(t, root, "host")
@@ -136,9 +137,10 @@ func TestNetInviteIsolation(t *testing.T) {
 		return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "allow one connection")
 	})
 	g.tmux("send-keys", "-t", "host", "1")
-	eventually(t, "Claude command copied", func() bool {
-		return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "Command copied") && len(invites(s)) == 2
+	eventually(t, "Claude command displayed", func() bool {
+		return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "Press Enter to close") && len(invites(s)) == 2
 	})
+	g.tmux("send-keys", "-t", "host", "Enter")
 	pairLink := inviteLinkForTest(t, s, "pair")
 	result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: pairLink})
 	inbox := fakeInbox(t, guest, result.Output)

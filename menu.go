@@ -143,6 +143,7 @@ func showMenu(s server, tty, view string, args []string) {
 		}
 		if i.State == "open" && !i.expired() {
 			add("Copy command", "c", act("invite-copy", i.ID))
+			add("Show command", "v", act("invite-show", i.ID))
 		}
 		if (i.State == "open" || i.State == "consumed") && !i.expired() {
 			add("Admission…", "a", act("menu", "admission", i.ID))
@@ -215,9 +216,10 @@ func cmdAct(args []string) {
 		remaining, expiry := inviteLimit(rest[1]), inviteExpiry(rest[2])
 		startShare(s)
 		i := createInvite(s, rest[0], remaining, expiry)
-		copyInvite(s, i)
-		say("Command copied · " + i.label())
-	case "invite-copy":
+		if copyInvite(s, tty, i) {
+			say("Command copied · " + i.label())
+		}
+	case "invite-copy", "invite-show":
 		if len(rest) != 1 {
 			fatalf("copy needs an invite")
 		}
@@ -225,8 +227,11 @@ func cmdAct(args []string) {
 		if !ok || i.State != "open" || i.expired() {
 			fatalf("invite is no longer accepting connections")
 		}
-		copyInvite(s, i)
-		say("Command copied · " + i.label())
+		if action == "invite-show" {
+			showInvite(s, tty, i)
+		} else if copyInvite(s, tty, i) {
+			say("Command copied · " + i.label())
+		}
 	case "invite-admission":
 		if len(rest) != 2 {
 			fatalf("admission needs an invite and limit")
@@ -311,12 +316,6 @@ func cmdAct(args []string) {
 		s.must("kill-server")
 	default:
 		fatalf("unknown action %q", action)
-	}
-}
-
-func copyInvite(s server, i invite) {
-	if !copyToClipboard(i.command(s)) {
-		s.must("set-buffer", "-w", i.command(s))
 	}
 }
 

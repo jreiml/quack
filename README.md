@@ -21,6 +21,14 @@ quack join tc…/<invite-id>
 ! quack pair tc…/<invite-id>
 ```
 
+Copying uses `pbcopy` on a local Mac, `wl-copy` on a Wayland desktop, or
+`xclip`/`xsel` on an X11 desktop. Over SSH, or without a working desktop
+clipboard tool, quack asks the terminal that opened the menu to copy the
+command using OSC 52. Terminal support and settings vary, so this path also
+shows the command for manual copying instead of claiming it was copied.
+Press Enter to close that view. Manage access → an invite → Show command
+opens it again. `quack share` also prints its new invite command to stdout.
+
 The Ctrl-Q menu has four main views:
 
 1. **Main:** invite to terminal (`t`), invite a Claude (`c`), manage access (`m`),

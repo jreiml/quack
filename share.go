@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -65,22 +64,6 @@ func startShare(s server) string {
 	}
 	fatalf("sharing timed out; see %s", logPath(s.name))
 	return ""
-}
-
-func copyToClipboard(text string) bool {
-	for _, c := range [][]string{{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"}} {
-		if _, err := exec.LookPath(c[0]); err != nil {
-			continue
-		}
-		cmd := exec.Command(c[0], c[1:]...)
-		cmd.Stdin = strings.NewReader(text)
-		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", c[0], err)
-			return false
-		}
-		return true
-	}
-	return false
 }
 
 func cmdShare(args []string) {
