@@ -1,13 +1,22 @@
 # quack
 
-Let someone into your terminal. quack runs Claude (or any command) in a session you can share at any time, peer-to-peer over [tailcat](https://github.com/tailscale/tailcat). Invites control who can join your terminal or pair a Claude or Codex session.
+Let someone into your terminal. quack runs a shell, Claude, Codex or any command in a session you can share at any time, peer-to-peer over [tailcat](https://github.com/tailscale/tailcat). Invites control who can join your terminal or pair a Claude or Codex session.
 
 ```
-quack new           start claude --dangerously-skip-permissions in a hidden tmux session
+quack new           start your shell in a hidden tmux session
+quack claude        start Claude in a hidden tmux session
+quack codex         start Codex in a hidden tmux session, ready for pairing
 Ctrl-Q  t a         copy a terminal invite that asks before admitting
 Ctrl-Q  c 1         copy a one-use agent invite, admitted without asking
 Ctrl-Q  m           manage invites and their connections
 ```
+
+`quack new` opens `$SHELL`, falling back to `/bin/sh` if it is unset.
+Arguments after `quack claude` or `quack codex` go directly to the agent—no
+`--` separator needed. For example, `quack claude --resume` or
+`quack codex resume`. Claude uses `--dangerously-skip-permissions`; Codex uses `--no-daemon` so quack can discover its thread, with
+Codex's normal tool permissions. For a custom session name, immediate sharing,
+or a different command, use `quack new -n name -s -- cmd`.
 
 ## Invites and access
 
@@ -160,7 +169,7 @@ and temporary `$TMPDIR/quack/pair-<pid>.log` diagnostic log. A forced kill or
 machine crash cannot run cleanup; these files contain no message history.
 
 Codex support requires a CLI with `codex queue` (tested with 0.156.1). Start a
-host with `quack new -- codex --no-daemon`, then send its first message before pairing.
+host with `quack codex`, then send its first message before pairing.
 On the guest, ask Codex to run `quack pair tc…/<invite-id>` through its shell tool.
 The same stable peer names work in `quack send` and `quack unpair`; thread UUIDs
 stay internal. No plugin or API key configuration is needed beyond Codex's own
@@ -227,13 +236,15 @@ curl -fsSL https://raw.githubusercontent.com/jreiml/quack/main/install.sh | sh
 
 This puts a prebuilt binary for macOS or Linux in `~/.local/bin` (set `QUACK_INSTALL_DIR` to change it). Binaries are also on the [releases page](https://github.com/jreiml/quack/releases). With Go installed, `go install github.com/jreiml/quack@latest` works too.
 
-It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`). A handy alias: `alias cc='quack new --'`.
+It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`).
 
 ## Commands
 
 | | |
 |---|---|
-| `quack new [-n name] [-s] [-- cmd]` | start a session (default `claude --dangerously-skip-permissions`) and attach; `-s` shares it right away |
+| `quack claude [args...]` | start Claude with `--dangerously-skip-permissions`; forward agent arguments |
+| `quack codex [args...]` | start Codex with `--no-daemon`; forward agent arguments |
+| `quack new [-n name] [-s] [-- cmd]` | start a session (default `$SHELL`, or `/bin/sh`) and attach; `-s` shares it right away |
 | `quack ls` | sessions with dir, age, attached, shared, guests, waiting |
 | `quack attach [name]` / `quack detach` | reattach / detach; the session keeps running |
 | `quack share [--pair] [name]` | create and copy a new terminal or agent invite |

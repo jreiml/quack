@@ -7,7 +7,9 @@ import (
 
 const usage = `quack: shareable terminal sessions over tailcat
 
-  quack new [-n name] [-s] [-- cmd]   start a session (default: claude --dangerously-skip-permissions) and attach; -s shares it at once
+  quack claude [args...]              start Claude with --dangerously-skip-permissions
+  quack codex [args...]               start Codex without the shared daemon, ready for pairing
+  quack new [-n name] [-s] [-- cmd]   start a session (default: $SHELL, or /bin/sh) and attach; -s shares it at once
   quack ls                            list sessions
   quack attach [name]                 reattach (default: most recent)
   quack detach [name]                 detach your terminals, keep the session running
@@ -51,6 +53,10 @@ func main() {
 	switch cmd {
 	case "new":
 		cmdNew(args)
+	case "claude":
+		cmdNew(append([]string{"--", "claude", "--dangerously-skip-permissions"}, args...))
+	case "codex":
+		cmdNew(append([]string{"--", "codex", "--no-daemon"}, args...))
 	case "ls", "list":
 		cmdLs(args)
 	case "attach", "a":
