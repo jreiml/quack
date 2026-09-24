@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const socketPrefix = "quack-"
@@ -144,12 +147,23 @@ func servers() []server {
 	for _, m := range matches {
 		s := server{strings.TrimPrefix(filepath.Base(m), socketPrefix)}
 		if !s.alive() {
-			os.Remove(m)
+			if stale(m) {
+				os.Remove(m)
+			}
 			continue
 		}
 		out = append(out, s)
 	}
 	return out
+}
+
+func stale(path string) bool {
+	c, err := net.Dial("unix", path)
+	if err == nil {
+		c.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 var versionRx = regexp.MustCompile(`(\d+)\.(\d+)`)
