@@ -124,12 +124,17 @@ func TestNativeClaudePair(t *testing.T) {
 	}
 	defer b.close()
 	addr, id := splitInviteLink(link)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	collaborate := os.Getenv("QUACK_TEST_COLLABORATE") == "1"
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	ready := false
 	reason := runPairClient(ctx, pairConfig{Invite: id, Identity: identity, Addr: addr, Key: key.NewNode(), Claude: a}, b, func(f pairFrame) bool {
 		if f.Type == "ready" {
 			ready = true
+			if collaborate {
+				time.AfterFunc(25*time.Second, cancel)
+				return false
+			}
 			for n := 1; n <= 2; n++ {
 				frame := localFrame{Type: "user", ID: randomID()}
 				frame.Message.Content = fmt.Sprintf("Quack Linux connectivity check %d of 2 from Codex. No action or reply needed. This temporary test pairing will disconnect shortly.", n)
@@ -141,6 +146,9 @@ func TestNativeClaudePair(t *testing.T) {
 		}
 		return true
 	})
+	if collaborate && ready {
+		pairNotice(b, b.record.Peer, "Pairing ended: "+reason)
+	}
 	if !ready || len(b.messages) != 0 || reason != "The pairing was stopped." {
 		t.Fatal("pairing did not complete the message test:", reason)
 	}
