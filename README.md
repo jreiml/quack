@@ -23,8 +23,9 @@ You own the session; guests can only leave.
 |---|---|---|
 | Esc / Ctrl-C | as usual | as usual, but at most one Ctrl-C every 3s reaches the session, so a double tap can't quit Claude |
 | Ctrl-D | as usual | ignored |
-| Ctrl-Q | menu | — |
+| Ctrl-Q | menu | menu with Leave |
 | Ctrl-Q q | detach, the session keeps running | leave |
+| Ctrl-C while waiting to be let in | — | cancels |
 
 | What happens | Session | Sharing | Guest sees |
 |---|---|---|---|
@@ -57,7 +58,7 @@ It needs tmux 3.3 or newer. Go 1.27.1 is fetched automatically on the first buil
 | `quack kick [who]` | disconnect a guest (or turn away a waiting one); they need a new approval |
 | `quack unshare [name]` | stop sharing; the link stops working and the session keeps running |
 | `quack stop [name]` | end the session |
-| `quack join <link>` | guest side; `Ctrl-Q` `q` leaves |
+| `quack join <link>` | guest side; Ctrl-Q opens the guest menu, `q` leaves |
 
 When there is no name, commands use the session you're in (`$QUACK_SESSION`), then the only session running, then a picker.
 

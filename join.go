@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -83,7 +84,7 @@ func cmdJoin(args []string) {
 		fatalf("join needs a terminal")
 	}
 	k := clientKey()
-	fmt.Fprintf(os.Stderr, "connecting… your code is %s  (Ctrl-Q q leaves)\n", codeFor(k.Public().String()))
+	fmt.Fprintf(os.Stderr, "connecting… your code is %s\n", codeFor(k.Public().String()))
 
 	cl := &tailcat.Client{Server: tailcat.Addr(addr), Key: k, Logf: logger.Discard}
 	defer cl.Close()
@@ -131,7 +132,8 @@ func cmdJoin(args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	sess.Stdout = os.Stdout
+	screen := &screenTracker{w: os.Stdout}
+	sess.Stdout = screen
 	sess.Stderr = os.Stderr
 
 	old, err := term.MakeRaw(fd)
@@ -149,7 +151,7 @@ func cmdJoin(args []string) {
 			}
 		}
 	}()
-	go forwardStdin(stdin, client)
+	go forwardStdin(stdin)
 	go keepalive(client)
 
 	if err := sess.Start("join " + displayName()); err != nil {
@@ -157,6 +159,9 @@ func cmdJoin(args []string) {
 		fatalf("%v", err)
 	}
 	err = sess.Wait()
+	if screen.alt {
+		os.Stdout.WriteString("\x1b[?1049l")
+	}
 	os.Stdout.WriteString(terminalReset)
 	term.Restore(fd, old)
 	if exit, ok := err.(*ssh.ExitError); ok && exit.ExitStatus() != 0 {
@@ -179,7 +184,21 @@ func keepalive(client *ssh.Client) {
 	}
 }
 
-const terminalReset = "\x1b[?1049l\x1b[?25h\x1b[<u\x1b[>4;0m\x1b[?1004l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m"
+const terminalReset = "\x1b[?25h\x1b[<u\x1b[>4;0m\x1b[?1004l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m"
+
+type screenTracker struct {
+	w   io.Writer
+	alt bool
+}
+
+func (t *screenTracker) Write(b []byte) (int, error) {
+	on := bytes.LastIndex(b, []byte("\x1b[?1049h"))
+	off := bytes.LastIndex(b, []byte("\x1b[?1049l"))
+	if on != off {
+		t.alt = on > off
+	}
+	return t.w.Write(b)
+}
 
 type keyKind int
 
@@ -187,8 +206,6 @@ const (
 	keyOther keyKind = iota
 	keyCtrlC
 	keyCtrlD
-	keyCtrlQ
-	keyQ
 	keyRelease
 	keyNoise
 )
@@ -198,7 +215,7 @@ const cancelEvery = 3 * time.Second
 func classify(code, mods, event int) keyKind {
 	if event == 3 {
 		switch code {
-		case 'c', 'd', 'q':
+		case 'c', 'd':
 			return keyRelease
 		}
 		return keyNoise
@@ -219,10 +236,6 @@ func classify(code, mods, event int) keyKind {
 		return keyCtrlC
 	case ctrl && code == 'd':
 		return keyCtrlD
-	case ctrl && code == 'q':
-		return keyCtrlQ
-	case !ctrl && code == 'q':
-		return keyQ
 	}
 	return keyOther
 }
@@ -241,10 +254,6 @@ func nextKey(b []byte) (keyKind, int) {
 		return keyCtrlC, 1
 	case 0x04:
 		return keyCtrlD, 1
-	case 0x11:
-		return keyCtrlQ, 1
-	case 'q':
-		return keyQ, 1
 	}
 	if b[0] != 0x1b || len(b) < 3 || b[1] != '[' {
 		return keyOther, 1
@@ -278,30 +287,17 @@ func nextKey(b []byte) (keyKind, int) {
 }
 
 type inputFilter struct {
-	pendingQ   []byte
 	lastCancel time.Time
 	now        func() time.Time
 }
 
-func (f *inputFilter) feed(b []byte) ([]byte, bool) {
-	out := make([]byte, 0, len(b)+8)
+func (f *inputFilter) feed(b []byte) []byte {
+	out := make([]byte, 0, len(b))
 	for len(b) > 0 {
 		k, size := nextKey(b)
 		raw := b[:size]
 		b = b[size:]
-		if f.pendingQ != nil {
-			if k == keyQ {
-				return out, true
-			}
-			if k == keyRelease || k == keyNoise {
-				continue
-			}
-			out = append(out, f.pendingQ...)
-			f.pendingQ = nil
-		}
 		switch k {
-		case keyCtrlQ:
-			f.pendingQ = append([]byte{}, raw...)
 		case keyCtrlD, keyRelease:
 		case keyCtrlC:
 			if f.now().Sub(f.lastCancel) >= cancelEvery {
@@ -312,10 +308,10 @@ func (f *inputFilter) feed(b []byte) ([]byte, bool) {
 			out = append(out, raw...)
 		}
 	}
-	return out, false
+	return out
 }
 
-func forwardStdin(w io.WriteCloser, client *ssh.Client) {
+func forwardStdin(w io.WriteCloser) {
 	buf := make([]byte, 4096)
 	f := &inputFilter{now: time.Now}
 	for {
@@ -324,12 +320,7 @@ func forwardStdin(w io.WriteCloser, client *ssh.Client) {
 			w.Close()
 			return
 		}
-		out, quit := f.feed(buf[:n])
-		if quit {
-			client.Close()
-			return
-		}
-		if _, err := w.Write(out); err != nil {
+		if _, err := w.Write(f.feed(buf[:n])); err != nil {
 			return
 		}
 	}

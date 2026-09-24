@@ -168,7 +168,7 @@ func cmdGate(args []string) {
 		if err := notify(fmt.Sprintf("%s wants to join %s · %s · Ctrl-Q to let them in", who, s.name, code)); err != nil {
 			logger.Printf("notify: %v", err)
 		}
-		fmt.Printf("\r\n  Waiting for the host to let you in.\r\n  Send them this code:  %s\r\n\r\n", code)
+		fmt.Printf("\r\n  Waiting for the host to let you in.\r\n  Send them this code:  %s\r\n\r\n  Ctrl-C cancels.\r\n", code)
 		for s.get("ok_"+hex) == "" {
 			if !s.alive() {
 				fmt.Printf("  The host ended the session.\r\n")

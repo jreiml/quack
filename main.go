@@ -16,7 +16,7 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack kick [who]                    disconnect a guest or turn away a waiting one
   quack unshare [name]                stop sharing; the link stops working
   quack stop [name]                   end the session
-  quack join <link>                   join someone's session (Ctrl-Q q to leave)
+  quack join <link>                   join someone's session (Ctrl-Q q leaves)
 
 Inside a session, Ctrl-Q opens the quack menu (share, allow, kick, unshare, detach).
 `
@@ -69,6 +69,8 @@ func main() {
 		cmdAct(args)
 	case "_fit":
 		cmdFit(args)
+	case "_quit":
+		cmdQuit(args)
 	case "_detached":
 		cmdDetached(args)
 	case "help", "-h", "--help":

@@ -21,7 +21,8 @@ func cmdMenu(args []string) {
 	}
 	s, tty := serverFromSocket(args[0]), args[1]
 	if guestTTYs(s)[tty] {
-		s.must("display-message", "-c", tty, "-d", "3000", "quack: Ctrl-Q q leaves")
+		s.must("display-menu", "-c", tty, "-x", "C", "-y", "C", "-T", "#[align=centre] quack · guest ",
+			"Leave", "q", fmt.Sprintf(`run-shell -b "%s _act %s %s leave"`, quackBin(), s.name, tty))
 		return
 	}
 	act := func(a ...string) string {
@@ -117,6 +118,15 @@ func cmdAct(args []string) {
 		say("quack: stopped sharing, the link is dead")
 	case "detach":
 		s.must("detach-client", "-t", tty)
+	case "leave":
+		for _, g := range guests(s) {
+			if g.tty == tty {
+				s.set("bye_"+g.hex, "You left the session.")
+				s.must("detach-client", "-t", tty)
+				return
+			}
+		}
+		fatalf("only guests can leave")
 	case "end":
 		s.must("kill-server")
 	default:
@@ -139,4 +149,16 @@ func cmdDetached(args []string) {
 		}
 	}
 	unshare(s, "The host left, so sharing stopped.")
+}
+
+func cmdQuit(args []string) {
+	if len(args) != 2 {
+		fatalf("usage: quack _quit <socket> <tty>")
+	}
+	s, tty := serverFromSocket(args[0]), args[1]
+	action := "detach"
+	if guestTTYs(s)[tty] {
+		action = "leave"
+	}
+	cmdAct([]string{s.name, tty, action})
 }
