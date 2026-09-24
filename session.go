@@ -95,6 +95,7 @@ func cmdNew(args []string) {
 	}
 	create = append(create, "--", bin)
 	s.must(append(create, args[1:]...)...)
+	s.must("set-option", "-w", "-t", "=main:", "window-size", "manual")
 	s.set("cmd", strings.Join(args, " "))
 	s.set("dir", dir)
 	if share {

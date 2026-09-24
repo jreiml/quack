@@ -189,7 +189,6 @@ func writeConfig() {
 		"unbind -a -T prefix",
 		"unbind -a -T root",
 		"set -g mouse off",
-		"set -g window-size manual",
 		"set -g fill-character ' '",
 		"set -s extended-keys on",
 		"set -g set-titles on",

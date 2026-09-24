@@ -170,6 +170,10 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("new printed %q", name)
 	}
 	s := server{name}
+	if got := s.must("show-options", "-wv", "-t", "=main:", "window-size"); got != "manual" {
+		t.Errorf("window-size = %q", got)
+	}
+	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
 	if got := s.must("show-options", "-gv", "status"); got != "on" {
 		t.Errorf("status = %q", got)
 	}
@@ -210,7 +214,11 @@ func TestTerminalClose(t *testing.T) {
 	eventually(t, "closing the terminal to end the session", func() bool { return !closed.alive() })
 
 	for _, away := range []bool{false, true} {
-		s := server{quack(t, "new", "-n", "t-keep", "--", "sleep", "300")}
+		name := "t-keep-attached"
+		if away {
+			name = "t-keep-away"
+		}
+		s := server{quack(t, "new", "-n", name, "--", "sleep", "300")}
 		host(s)
 		if away {
 			createInvite(s, "join", 0, time.Hour)
