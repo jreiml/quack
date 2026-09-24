@@ -56,12 +56,13 @@ func TestNormalizeCode(t *testing.T) {
 
 func TestCleanName(t *testing.T) {
 	for in, want := range map[string]string{
-		"join Ada Lovelace":               "Ada Lovelace",
-		"join":                            "someone",
-		"":                                "someone",
-		"join Ré'my O.":                   "Ré'my O.",
-		"join a|b#c$(rm -rf /)":           "abcrm -rf",
-		"join " + strings.Repeat("x", 60): strings.Repeat("x", 40),
+		"Ada Lovelace":          "Ada Lovelace",
+		"join":                  "join",
+		"joiner":                "joiner",
+		"":                      "someone",
+		"Ré'my O.":              "Ré'my O.",
+		"a|b#c$(rm -rf /)":      "abcrm -rf",
+		strings.Repeat("x", 60): strings.Repeat("x", 40),
 	} {
 		if got := cleanName(in); got != want {
 			t.Errorf("cleanName(%q) = %q, want %q", in, got, want)

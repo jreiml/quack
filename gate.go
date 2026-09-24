@@ -28,7 +28,7 @@ func normalizeCode(args []string) string {
 func channel(hex string) string { return "quack-" + hex[:16] }
 
 func cleanName(raw string) string {
-	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "join"))
+	raw = strings.TrimSpace(raw)
 	var b strings.Builder
 	for _, r := range raw {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" .-_@'", r) {

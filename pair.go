@@ -31,7 +31,6 @@ type pairFrame struct {
 	Identity *agentIdentity `json:"identity,omitempty"`
 	Type     string         `json:"type"`
 	Version  int            `json:"version,omitempty"`
-	Name     string         `json:"name,omitempty"`
 	ID       string         `json:"id,omitempty"`
 	Text     string         `json:"text,omitempty"`
 }
@@ -55,7 +54,7 @@ func newPairWire(r io.Reader, w io.Writer) *pairWire {
 				p.errors <- fmt.Errorf("invalid pair frame: %w", err)
 				return
 			}
-			if len(f.Text) > pairMessageLimit || len(f.ID) > 128 || len(f.Name) > 160 {
+			if len(f.Text) > pairMessageLimit || len(f.ID) > 128 {
 				p.errors <- fmt.Errorf("pair frame too large")
 				return
 			}
@@ -213,7 +212,6 @@ type pairConfig struct {
 	Addr     string          `json:"addr"`
 	Key      key.NodePrivate `json:"key"`
 	Claude   claudeEndpoint  `json:"claude"`
-	Name     string          `json:"name"`
 }
 
 func cmdPair(args []string) {
@@ -249,7 +247,7 @@ func cmdPair(args []string) {
 	}
 	childFile.Close()
 	go c.Wait()
-	cfg := pairConfig{inviteID, identity, addr, key.NewNode(), a, identity.Owner}
+	cfg := pairConfig{Invite: inviteID, Identity: identity, Addr: addr, Key: key.NewNode(), Claude: a}
 	if err := json.NewEncoder(control).Encode(cfg); err != nil {
 		fatalf("starting pair: %v", err)
 	}
@@ -390,7 +388,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 		return fail(err)
 	}
 	sess.Stderr = os.Stderr
-	if err := sess.Start("pair-invite " + cfg.Invite + " " + cfg.Name); err != nil {
+	if err := sess.Start("pair-invite " + cfg.Invite + " " + cfg.Identity.Owner); err != nil {
 		return fail(err)
 	}
 	go keepalive(client)
@@ -704,13 +702,4 @@ func pairs(s server) []entry {
 		out = append(out, entry{s: s, hex: id, invite: s.get("member_" + id), name: f[0], code: f[1], pid: pid, state: f[3], pair: true})
 	}
 	return out
-}
-
-func endPairs(s server, reason string) {
-	for _, p := range pairs(s) {
-		s.set("bye_"+p.hex, reason)
-		if err := syscall.Kill(p.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
-			fatalf("ending pairing with %s: %v", p.name, err)
-		}
-	}
 }
