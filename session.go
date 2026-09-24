@@ -188,6 +188,7 @@ type info struct {
 	dir     string
 	hosts   int
 	guests  int
+	pairs   int
 	waiting int
 	shared  bool
 	auto    bool
@@ -204,6 +205,11 @@ func describe(s server) info {
 			i.guests++
 		} else {
 			i.hosts++
+		}
+	}
+	for _, p := range pairs(s) {
+		if p.state == "active" {
+			i.pairs++
 		}
 	}
 	i.waiting = len(s.opts("wait_"))
@@ -253,6 +259,9 @@ func (i info) state() string {
 	}
 	if i.guests > 0 {
 		parts = append(parts, plural(i.guests, "guest"))
+	}
+	if i.pairs > 0 {
+		parts = append(parts, plural(i.pairs, "pair"))
 	}
 	if i.waiting > 0 {
 		parts = append(parts, fmt.Sprintf("%d waiting", i.waiting))

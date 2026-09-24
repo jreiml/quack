@@ -66,7 +66,7 @@ func startShare(s server) string {
 }
 
 func joinMessage(addr string) string {
-	return "quack join " + addr
+	return "Join my terminal: quack join " + addr + "\nPair your Claude (inside Claude): ! quack pair " + addr
 }
 
 func copyToClipboard(text string) bool {
@@ -170,8 +170,12 @@ func unshare(s server, reason string) {
 		s.unset("wait_" + hex)
 		s.must("wait-for", "-S", channel(hex))
 	}
-	for _, g := range guests(s) {
-		if err := syscall.Kill(-g.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
+	for _, g := range append(guests(s), pairs(s)...) {
+		pid := -g.pid
+		if g.pair {
+			pid = g.pid
+		}
+		if err := syscall.Kill(pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
 			fatalf("hanging up %s: %v", g.name, err)
 		}
 	}
@@ -179,6 +183,9 @@ func unshare(s server, reason string) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	s.must("kill-session", "-t", "=_serve")
+	for id := range s.opts("pair_") {
+		s.unset("pair_" + id)
+	}
 	for id := range s.opts("guest_") {
 		s.unset("guest_" + id)
 	}
@@ -303,11 +310,16 @@ func connID(remote string) string { return nonAlnum.ReplaceAllString(remote, "_"
 
 func hangUp(s server, remote string, logger *log.Logger) {
 	id := connID(remote)
-	pid, err := strconv.Atoi(s.get("pid_" + id))
+	value := s.get("pid_" + id)
+	pair := strings.HasPrefix(value, "pair:")
+	pid, err := strconv.Atoi(strings.TrimPrefix(value, "pair:"))
 	if err != nil {
 		return
 	}
-	if err := syscall.Kill(-pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
+	if !pair {
+		pid = -pid
+	}
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
 		logger.Printf("hangup %s: %v", remote, err)
 	}
 }

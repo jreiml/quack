@@ -20,6 +20,8 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack decline <code>                turn away a waiting guest
   quack unshare [name]                stop sharing; everyone is disconnected and the link stops working
   quack stop [name]                   end the session
+  quack pair <link>                   pair Claude agents (run inside Claude with !)
+  quack unpair [name]                 end an agent pairing
   quack join <link>                   join someone's session (Ctrl-Q q leaves)
 
 Inside a session, Ctrl-Q opens the quack menu (share, let in, who new people get in, stop sharing, detach).
@@ -66,6 +68,12 @@ func main() {
 		cmdStop(args)
 	case "join":
 		cmdJoin(args)
+	case "pair":
+		cmdPair(args)
+	case "unpair":
+		cmdUnpair(args)
+	case "_pair":
+		cmdPairWorker(args)
 	case "_serve":
 		cmdServe(args)
 	case "_gate":

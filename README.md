@@ -4,7 +4,7 @@ Let someone into your terminal. quack runs Claude (or any command) in a session 
 
 ```
 quack new           start claude --dangerously-skip-permissions in a hidden tmux session
-Ctrl-Q  s           share: copies "quack join tc…" to paste to your guest
+Ctrl-Q  s           share: copies terminal and Claude pairing commands
                     they run it and send you the code it shows, e.g. tiger-lamp
 Ctrl-Q  1           "Let Ada Lovelace in (tiger-lamp)": check the code matches, they're in
 ```
@@ -27,7 +27,60 @@ quack share --auto-approve --expires 2h        anyone joins, for two hours
 quack close                                    back to ask first
 ```
 
-"Next one" and "anyone" are for handing a session over or being away: sharing stays on after you detach, until the end time. When they end, new people wait for your OK again, while the link and anyone already in stay. If the end time passes with nobody attached, sharing stops. With ask first, sharing stops as soon as you detach.
+"Next one" and "anyone" are for handing a session over or being away: sharing stays on after you detach, until the end time. When they end, new people wait for your OK again, while the link and terminal guests already in stay. Agent pairings end at expiry. If the end time passes with nobody attached, sharing stops. With ask first, sharing stops as soon as you detach.
+
+## Pairing agents
+
+Two Claude Code sessions can message each other over the same share link. The
+share message offers both options:
+
+```
+Join my terminal: quack join tc…
+Pair your Claude (inside Claude): ! quack pair tc…
+```
+
+Ada Lovelace pastes `! quack pair tc…` into Claude's shell mode. This authorizes
+receiving messages on Ada's side. The host sees **Let Ada Lovelace's Claude in
+(tiger-lamp)** in Ctrl-Q, with a reminder that approving lets that peer's
+messages reach Claude without asking again. Check the code before allowing.
+`quack allow` and `quack decline` work too. The same next-one/anyone settings
+and limits apply to both terminal guests and pairs: a pairing consumes one
+spot. Each new pairing gets a fresh code and needs admission again.
+
+The command waits up to three seconds for a connection and approval. If ready,
+it prints a prompt explaining who Claude is paired with and how to send a
+message. Otherwise it prints the code and returns; a background process tells
+Claude when approval happens or connecting fails. No skill or plugin is needed.
+The host's Claude also gets a pairing prompt. Both use native `SendMessage` to
+the local inbox address in that prompt; only those messages cross the link.
+Conversation history and files are not shared.
+
+The host's bar shows `🤖 Ada Lovelace`, or `✋ Ada Lovelace's Claude wants to pair
+(code tiger-lamp)` while waiting. `quack ls` counts active pairs. Each bridge
+also appears as `quack-<peer>-<pid>` in Claude's `ListAgents`.
+
+Run `quack unpair` inside Claude to end its pairings, or `quack unpair "Ada Lovelace"` from a terminal to select a peer. The `quack-<peer>-<pid>` inbox name
+also selects an individual pairing. Stopping sharing, its expiry, host detach
+in ask-first mode, or either Claude exiting ends the pairing. The surviving
+Claude gets an ending notice. Each direction allows 30 messages per rolling
+10 minutes, with a notice to the sender when the cap drops a message. Messages
+are limited to 32 KiB of text; attachments and delivery receipts are not bridged.
+
+Pairing uses Claude Code's internal local messaging protocol, inspected in
+2.1.281 on macOS, and requires a live messaging socket and key file. The host
+must have exactly one Claude inbox under the shared tmux window; the guest is
+identified from the calling Claude process. The bridge declares
+`from-mode="bypass"`, matching quack's default Claude launch. This does not change
+Claude's tool permissions or settings. A prompting-mode Claude, or an explicit
+inbound hold/refuse policy, may still hold or reject messages. Socket delivery
+is not proof of model acceptance. Current permission modes are not reliably
+observable, so the menu warns about this limitation instead of claiming to
+detect mode differences.
+
+Pair tunnel keys exist only in memory. Normal shutdown removes the bridge's
+socket, local authentication key, Claude registry entry and temporary
+`$TMPDIR/quack/pair-<pid>.log` diagnostic log. A forced kill or
+machine crash cannot run cleanup; these files contain no message history.
 
 ## The status bar
 
@@ -95,9 +148,11 @@ It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`). A handy al
 | `quack decline <code>` | turn away a waiting guest |
 | `quack unshare [name]` | stop sharing; the link stops working and the session keeps running |
 | `quack stop [name]` | end the session |
+| `quack pair <link>` | pair your Claude; run as `! quack pair tc…` inside Claude |
+| `quack unpair [name]` | end your Claude's pairings, or select a peer/inbox by name |
 | `quack join <link>` | guest side; Ctrl-Q opens the guest menu, `q` leaves |
 
-When there is no name, commands use the session you're in (`$QUACK_SESSION`), then the only session running, then a picker.
+For session commands without a name, quack uses the session you're in (`$QUACK_SESSION`), then the only session running, then a picker.
 
 ## How it works
 
@@ -113,6 +168,7 @@ When there is no name, commands use the session you're in (`$QUACK_SESSION`), th
 - With next one or anyone joins, the link is the key: whoever has it gets in, up to the limit and until it expires. Send it in a direct message, not a channel. Next one joins is the safe choice for handing over to one person: if someone else used the link first, your person ends up waiting and will tell you.
 - To get someone out, stop sharing: everyone is disconnected and the link stops working. Share again for a new link and send it only to the people who should stay.
 - An allowed guest can type, which means they can run anything as you, and by default Claude runs with `--dangerously-skip-permissions`, so it won't ask before acting on what they type. Only allow people you're talking to right now. Use `quack new -- claude` for a session that asks.
+- A paired agent's messages reach a Claude that may run with `--dangerously-skip-permissions` and act as you. Pairing approval grants ongoing message access; prompt-injection checks are not an authorization boundary. Only pair with people you trust. Next-one/anyone modes also admit agents holding the link.
 - Traffic is end-to-end encrypted (WireGuard). It goes peer-to-peer where NAT allows, otherwise through Tailscale's public DERP relays, which see only encrypted packets.
 - The guest's display name comes from their git config and isn't verified. The code is what identifies them.
 

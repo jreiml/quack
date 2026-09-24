@@ -118,6 +118,10 @@ func TestInputFilter(t *testing.T) {
 var bin string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("QUACK_PAIR_HELPER") == "1" {
+		fakeClaude()
+		return
+	}
 	dir, err := os.MkdirTemp("/tmp", "pk")
 	if err != nil {
 		panic(err)

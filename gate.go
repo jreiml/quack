@@ -46,19 +46,24 @@ func cleanName(raw string) string {
 }
 
 type entry struct {
-	s    server
-	hex  string
-	code string
-	name string
-	tty  string
-	pid  int
+	s     server
+	hex   string
+	code  string
+	name  string
+	tty   string
+	pid   int
+	pair  bool
+	state string
 }
 
 func waiting(s server) []entry {
 	var out []entry
 	for hex, v := range s.opts("wait_") {
-		code, name, _ := strings.Cut(v, "|")
-		out = append(out, entry{s: s, hex: hex, code: code, name: name})
+		f := strings.SplitN(v, "|", 3)
+		if len(f) < 2 {
+			continue
+		}
+		out = append(out, entry{s: s, hex: hex, code: f[0], name: f[1], pair: len(f) == 3 && f[2] == "pair"})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].name < out[b].name })
 	return out
@@ -119,8 +124,17 @@ func refreshStatus(s server) {
 	if names := namesExcept(""); len(names) > 0 {
 		host = append(host, statusEscape("👀 "+strings.Join(names, ", ")))
 	}
+	for _, p := range pairs(s) {
+		if p.state == "active" {
+			host = append(host, statusEscape("🤖 "+p.name))
+		}
+	}
 	for _, w := range ws {
-		host = append(host, "#[bg=colour220#,fg=colour16] "+statusEscape(fmt.Sprintf("✋ %s wants to join (code %s)", w.name, w.code))+" #[default]")
+		verb := "join"
+		if w.pair {
+			verb = "pair"
+		}
+		host = append(host, "#[bg=colour220#,fg=colour16] "+statusEscape(fmt.Sprintf("✋ %s wants to %s (code %s)", w.name, verb, w.code))+" #[default]")
 	}
 	format := statusLine(host)
 	for id, note := range s.opts("note_") {
@@ -173,6 +187,19 @@ func cmdGate(args []string) {
 	pub := os.Getenv("TAILCAT_PEER_KEY")
 	if !strings.HasPrefix(pub, "nodekey:") {
 		logger.Fatalf("gate: missing TAILCAT_PEER_KEY")
+	}
+	command, name, _ := strings.Cut(strings.TrimSpace(os.Getenv("SSH_ORIGINAL_COMMAND")), " ")
+	if command == "pair" {
+		if syscall.Getpgrp() != os.Getpid() {
+			if err := syscall.Setpgid(0, 0); err != nil {
+				logger.Fatalf("pair process group: %v", err)
+			}
+		}
+		pairGate(s, pub, cleanName(name))
+		return
+	}
+	if command != "join" {
+		logger.Fatalf("unsupported guest command")
 	}
 	hex := strings.TrimPrefix(pub, "nodekey:")
 	who := cleanName(os.Getenv("SSH_ORIGINAL_COMMAND"))

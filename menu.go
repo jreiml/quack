@@ -55,6 +55,10 @@ func cmdMenu(args []string) {
 			key = strconv.Itoa(i + 1)
 		}
 		add("Let "+w.name+" in ("+w.code+")", key, act("allow", w.hex))
+		if w.pair {
+			add("-  Their messages reach this Claude without asking", "", "")
+			add("-  Claude may ask again in a different permission mode", "", "")
+		}
 	}
 	for _, w := range ws {
 		add("Turn "+w.name+" away", "", act("decline", w.hex))

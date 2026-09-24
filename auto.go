@@ -141,6 +141,7 @@ func expireLoop(s server, logger *log.Logger) {
 		if !ok || time.Now().Before(until) {
 			continue
 		}
+		endPairs(s, "The share's pairing time expired.")
 		closeAuto(s)
 		logger.Printf("auto-approve expired")
 		if err := notify("No longer letting people into " + s.name + " without asking."); err != nil {
