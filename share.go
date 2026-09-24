@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tailscale/tailcat"
+	"golang.org/x/sys/unix"
 )
 
 func (s server) shared() bool {
@@ -132,7 +133,7 @@ func cmdServe(args []string) {
 	}
 	s := server{args[0]}
 	logger, f := openLog(s.name)
-	if err := syscall.Dup2(int(f.Fd()), 2); err != nil {
+	if err := unix.Dup2(int(f.Fd()), 2); err != nil {
 		logger.Fatalf("dup2: %v", err)
 	}
 	srv := &tailcat.Server{Logf: logger.Printf}

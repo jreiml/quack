@@ -3,7 +3,7 @@
 Let someone into your terminal. quack runs Claude (or any command) in a session you can share at any time, peer-to-peer over [tailcat](https://github.com/tailscale/tailcat). Guests get in only with a code you approve.
 
 ```
-quack new           start claude in a hidden tmux session
+quack new           start claude --dangerously-skip-permissions in a hidden tmux session
 Ctrl-Q  s           share: copies "quack join tc…" to paste to your guest
                     they run it and send you the code it shows, e.g. tiger-lamp
 Ctrl-Q  1           "Let in Ada Lovelace · tiger-lamp": check the code matches, they're in
@@ -40,17 +40,18 @@ The shared window always has the host's terminal size. Guests with a bigger term
 ## Install
 
 ```
-go install github.com/jreiml/quack@latest
-alias cc='quack new --'
+curl -fsSL https://raw.githubusercontent.com/jreiml/quack/main/install.sh | sh
 ```
 
-It needs tmux 3.3 or newer. Go 1.27.1 is fetched automatically on the first build (`GOTOOLCHAIN=auto`).
+This puts a prebuilt binary for macOS or Linux in `~/.local/bin` (set `QUACK_INSTALL_DIR` to change it). Binaries are also on the [releases page](https://github.com/jreiml/quack/releases). With Go installed, `go install github.com/jreiml/quack@latest` works too.
+
+It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`). A handy alias: `alias cc='quack new --'`.
 
 ## Commands
 
 | | |
 |---|---|
-| `quack new [-n name] [-s] [-- cmd]` | start a session (default `claude`) and attach; `-s` shares it right away |
+| `quack new [-n name] [-s] [-- cmd]` | start a session (default `claude --dangerously-skip-permissions`) and attach; `-s` shares it right away |
 | `quack ls` | sessions with dir, age, attached, shared, guests, waiting |
 | `quack attach [name]` / `quack detach` | reattach / detach; the session keeps running |
 | `quack share [name]` | share and copy the join message; run it again to re-copy |
@@ -73,7 +74,7 @@ When there is no name, commands use the session you're in (`$QUACK_SESSION`), th
 ## Security
 
 - The link alone doesn't get anyone in: every new guest needs your `allow`.
-- An allowed guest can type, which means they can run anything as you. Only allow people you're talking to right now.
+- An allowed guest can type, which means they can run anything as you, and by default Claude runs with `--dangerously-skip-permissions`, so it won't ask before acting on what they type. Only allow people you're talking to right now. Use `quack new -- claude` for a session that asks.
 - Traffic is end-to-end encrypted (WireGuard). It goes peer-to-peer where NAT allows, otherwise through Tailscale's public DERP relays, which see only encrypted packets.
 - The guest's display name comes from their git config and isn't verified. The code is what identifies them.
 
