@@ -24,7 +24,7 @@ func (g guestTerm) tmux(args ...string) string {
 }
 
 func (g guestTerm) join(addr string) {
-	exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
+	exec.Command(tmuxBin(), "-S", g.sock, "kill-session", "-t", "g").Run()
 	g.tmux("new-session", "-d", "-s", "g", "-x", "100", "-y", "30", bin+" join "+addr+"; sleep 120")
 }
 
@@ -46,6 +46,9 @@ func TestNetShareJoin(t *testing.T) {
 	}
 	g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "guest")}
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
+
+	g.tmux("new-session", "-d", "-s", "host", "-x", "100", "-y", "30", bin+" attach t-net")
+	eventually(t, "host to attach", func() bool { return strings.TrimSpace(s.must("list-clients", "-t", "=main")) != "" })
 
 	g.join(addr)
 	eventually(t, "guest to wait", func() bool { return len(waiting(s)) == 1 && codeRx.MatchString(g.screen()) })
@@ -87,7 +90,6 @@ func TestNetShareJoin(t *testing.T) {
 	if s.shared() {
 		t.Errorf("still shared after unshare")
 	}
-	eventually(t, "guest to be dropped", func() bool {
-		return strings.Contains(g.screen(), "declined") || strings.Contains(g.screen(), "disconnected")
-	})
+	eventually(t, "guest to be told", func() bool { return strings.Contains(g.screen(), "The host stopped sharing.") })
+
 }

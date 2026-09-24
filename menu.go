@@ -21,7 +21,7 @@ func cmdMenu(args []string) {
 	}
 	s, tty := serverFromSocket(args[0]), args[1]
 	if guestTTYs(s)[tty] {
-		s.must("display-message", "-c", tty, "-d", "3000", "only the host can open the quack menu")
+		s.must("display-message", "-c", tty, "-d", "3000", "quack: Ctrl-Q q leaves")
 		return
 	}
 	act := func(a ...string) string {
@@ -59,7 +59,8 @@ func cmdMenu(args []string) {
 		add("Stop sharing", "u", act("unshare"))
 	}
 	add("", "", "")
-	add("Detach", "d", act("detach"))
+	add("Detach (keeps running)", "q", act("detach"))
+	add("End session", "x", act("end"))
 	s.must(items...)
 }
 
@@ -103,14 +104,39 @@ func cmdAct(args []string) {
 				name = e.name
 			}
 		}
-		kickHex(s, rest[0])
+		reason := "The host removed you."
+		for _, e := range waiting(s) {
+			if e.hex == rest[0] {
+				reason = "The host declined."
+			}
+		}
+		kickHex(s, rest[0], reason)
 		say("quack: kicked " + name)
 	case "unshare":
-		unshare(s)
+		unshare(s, "The host stopped sharing.")
 		say("quack: stopped sharing, the link is dead")
 	case "detach":
 		s.must("detach-client", "-t", tty)
+	case "end":
+		s.must("kill-server")
 	default:
 		fatalf("unknown action %q", action)
 	}
+}
+
+func cmdDetached(args []string) {
+	if len(args) != 1 {
+		fatalf("usage: quack _detached <socket>")
+	}
+	s := serverFromSocket(args[0])
+	if !s.alive() || !s.shared() {
+		return
+	}
+	guests := guestTTYs(s)
+	for _, tty := range strings.Fields(s.must("list-clients", "-t", "=main", "-F", "#{client_tty}")) {
+		if !guests[tty] {
+			return
+		}
+	}
+	unshare(s, "The host left, so sharing stopped.")
 }

@@ -204,6 +204,7 @@ func writeConfig() {
 		"set -g window-status-current-format ''",
 		fmt.Sprintf(`bind -n C-q run-shell -b "%s _menu '#{socket_path}' '#{client_tty}'"`, quackBin()),
 		fmt.Sprintf(`set-hook -g client-attached 'run-shell -b "%s _fit #{socket_path}"'`, quackBin()),
+		fmt.Sprintf(`set-hook -g client-detached 'run-shell -b "%s _detached #{socket_path}"'`, quackBin()),
 		fmt.Sprintf(`set-hook -g client-resized 'run-shell -b "%s _fit #{socket_path}"'`, quackBin()),
 		fmt.Sprintf(`set-hook -g session-closed 'run-shell "%s has-session -t =main 2>/dev/null || %s kill-server"'`, tmux, tmux),
 	}

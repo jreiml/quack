@@ -96,15 +96,17 @@ func cmdUnshare(args []string) {
 	if !s.shared() {
 		fatalf("%s is not shared", s.name)
 	}
-	unshare(s)
+	unshare(s, "The host stopped sharing.")
 	fmt.Fprintf(os.Stderr, "%s is no longer shared; the old link is dead\n", s.name)
 }
 
-func unshare(s server) {
+func unshare(s server, reason string) {
 	for hex := range s.opts("ok_") {
 		s.unset("ok_" + hex)
+		s.set("bye_"+hex, reason)
 	}
 	for hex := range s.opts("wait_") {
+		s.set("bye_"+hex, reason)
 		s.unset("wait_" + hex)
 		s.must("wait-for", "-S", channel(hex))
 	}

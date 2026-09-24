@@ -85,6 +85,45 @@ func TestConnID(t *testing.T) {
 	}
 }
 
+func TestInputFilter(t *testing.T) {
+	clock := time.Unix(1000, 0)
+	f := &inputFilter{now: func() time.Time { return clock }}
+	step := func(in string, want string, wantQuit bool) {
+		t.Helper()
+		out, quit := f.feed([]byte(in))
+		if string(out) != want || quit != wantQuit {
+			t.Errorf("feed(%q) = %q, %v; want %q, %v", in, out, quit, want, wantQuit)
+		}
+	}
+	step("hello", "hello", false)
+	step("\x03", "\x03", false)
+	step("\x03", "", false)
+	step("\x1b[99;5u", "", false)
+	step("\x1b[27;5;99~", "", false)
+	clock = clock.Add(4 * time.Second)
+	step("\x1b[99;5u", "\x1b[99;5u", false)
+	step("\x04", "", false)
+	step("\x1b[100;5u", "", false)
+	step("\x1b[99;5:3u", "", false)
+	step("\x1b[99;6u", "\x1b[99;6u", false)
+	step("\x11x", "\x11x", false)
+	step("\x11", "", false)
+	step("a", "\x11a", false)
+	step("\x1b[A", "\x1b[A", false)
+	step("\x1b[113;5u", "", false)
+	step("\x1b[113;5:3u", "", false)
+	step("q", "", true)
+}
+
+func TestInputFilterCtrlQQInOneRead(t *testing.T) {
+	for _, in := range []string{"\x11q", "\x1b[113;5uq", "\x1b[27;5;113~q", "\x1b[113;5u\x1b[113u"} {
+		f := &inputFilter{now: time.Now}
+		if _, quit := f.feed([]byte(in)); !quit {
+			t.Errorf("%q did not quit", in)
+		}
+	}
+}
+
 var bin string
 
 func TestMain(m *testing.M) {

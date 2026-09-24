@@ -153,6 +153,7 @@ func cmdGate(args []string) {
 	code := codeFor(pub)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+	s.run("set-option", "-gu", "@quack_bye_"+hex)
 	pidOpt := "@quack_pid_" + connID(os.Getenv("TAILCAT_REMOTE_ADDR"))
 	s.must("set-option", "-g", pidOpt, strconv.Itoa(os.Getpid()))
 	leave := func(code int) {
@@ -170,11 +171,11 @@ func cmdGate(args []string) {
 		fmt.Printf("\r\n  Waiting for the host to let you in.\r\n  Send them this code:  %s\r\n\r\n", code)
 		for s.get("ok_"+hex) == "" {
 			if !s.alive() {
-				fmt.Printf("  The host's session ended.\r\n")
+				fmt.Printf("  The host ended the session.\r\n")
 				leave(1)
 			}
 			if s.get("wait_"+hex) == "" {
-				fmt.Printf("  The host declined.\r\n")
+				sayBye(s, hex, "The host declined.")
 				leave(1)
 			}
 			wait := s.cmd("wait-for", channel(hex))
@@ -215,7 +216,7 @@ func cmdGate(args []string) {
 	if s.get("ok_"+hex) == "" {
 		s.run("set-option", "-gu", "@quack_guest_"+id)
 		refreshStatus(s)
-		fmt.Printf("  The host removed you.\r\n")
+		sayBye(s, hex, "The host removed you.")
 		leave(1)
 	}
 	attach := s.cmd("attach-session", "-t", "=main")
@@ -224,9 +225,11 @@ func cmdGate(args []string) {
 		logger.Printf("%s attach: %v", who, err)
 	}
 	if !s.alive() {
-		fmt.Printf("\r\nThe host's session ended.\r\n")
-	} else if _, err := s.run("set-option", "-gu", "@quack_guest_"+id); err == nil {
+		fmt.Printf("\r\n  The host ended the session.\r\n")
+	} else {
+		s.run("set-option", "-gu", "@quack_guest_"+id)
 		refreshStatus(s)
+		sayBye(s, hex, "")
 	}
 	logger.Printf("%s (%s) left", who, code)
 	leave(0)
@@ -272,7 +275,8 @@ func admit(e entry) {
 	e.s.must("wait-for", "-S", channel(e.hex))
 }
 
-func kickHex(s server, hex string) {
+func kickHex(s server, hex, reason string) {
+	s.set("bye_"+hex, reason)
 	s.run("set-option", "-gu", "@quack_ok_"+hex)
 	for _, g := range guests(s) {
 		if g.hex == hex {
@@ -286,6 +290,24 @@ func kickHex(s server, hex string) {
 		s.must("wait-for", "-S", channel(hex))
 	}
 	refreshStatus(s)
+}
+
+func byeFor(e entry) string {
+	if e.tty == "" {
+		return "The host declined."
+	}
+	return "The host removed you."
+}
+
+func sayBye(s server, hex, fallback string) {
+	msg := s.get("bye_" + hex)
+	if msg == "" {
+		msg = fallback
+	}
+	if msg != "" {
+		fmt.Printf("\r\n  %s\r\n", msg)
+	}
+	s.run("set-option", "-gu", "@quack_bye_"+hex)
 }
 
 func cmdAllow(args []string) {
@@ -332,6 +354,6 @@ func cmdKick(args []string) {
 	if len(hexes) > 1 {
 		fatalf("several people match; be more specific:\n%s", describeEntries(match))
 	}
-	kickHex(match[0].s, match[0].hex)
+	kickHex(match[0].s, match[0].hex, byeFor(match[0]))
 	fmt.Fprintf(os.Stderr, "kicked %s\n", match[0].name)
 }

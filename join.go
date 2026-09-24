@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -156,6 +157,7 @@ func cmdJoin(args []string) {
 		fatalf("%v", err)
 	}
 	err = sess.Wait()
+	os.Stdout.WriteString(terminalReset)
 	term.Restore(fd, old)
 	if exit, ok := err.(*ssh.ExitError); ok && exit.ExitStatus() != 0 {
 		os.Exit(exit.ExitStatus())
@@ -177,31 +179,151 @@ func keepalive(client *ssh.Client) {
 	}
 }
 
-const ctrlQ = 0x11
+const terminalReset = "\x1b[?1049l\x1b[?25h\x1b[<u\x1b[>4;0m\x1b[?1004l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[0m"
+
+type keyKind int
+
+const (
+	keyOther keyKind = iota
+	keyCtrlC
+	keyCtrlD
+	keyCtrlQ
+	keyQ
+	keyRelease
+)
+
+const cancelEvery = 3 * time.Second
+
+func classify(code, mods, event int) keyKind {
+	if event == 3 {
+		switch code {
+		case 'c', 'd', 'q':
+			return keyRelease
+		}
+		return keyOther
+	}
+	m := mods - 1
+	if m < 0 {
+		m = 0
+	}
+	ctrl := m&4 != 0
+	if m&^(4|64|128) != 0 {
+		return keyOther
+	}
+	switch {
+	case ctrl && code == 'c':
+		return keyCtrlC
+	case ctrl && code == 'd':
+		return keyCtrlD
+	case ctrl && code == 'q':
+		return keyCtrlQ
+	case !ctrl && code == 'q':
+		return keyQ
+	}
+	return keyOther
+}
+
+func atoiOr(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func nextKey(b []byte) (keyKind, int) {
+	switch b[0] {
+	case 0x03:
+		return keyCtrlC, 1
+	case 0x04:
+		return keyCtrlD, 1
+	case 0x11:
+		return keyCtrlQ, 1
+	case 'q':
+		return keyQ, 1
+	}
+	if b[0] != 0x1b || len(b) < 3 || b[1] != '[' {
+		return keyOther, 1
+	}
+	end := 2
+	for end < len(b) && b[end] >= 0x30 && b[end] <= 0x3f {
+		end++
+	}
+	if end >= len(b) {
+		return keyOther, len(b)
+	}
+	params := strings.Split(string(b[2:end]), ";")
+	switch b[end] {
+	case 'u':
+		code := atoiOr(strings.Split(params[0], ":")[0], -1)
+		mods, event := 1, 1
+		if len(params) > 1 {
+			me := strings.Split(params[1], ":")
+			mods = atoiOr(me[0], 1)
+			if len(me) > 1 {
+				event = atoiOr(me[1], 1)
+			}
+		}
+		return classify(code, mods, event), end + 1
+	case '~':
+		if len(params) == 3 && params[0] == "27" {
+			return classify(atoiOr(params[2], -1), atoiOr(params[1], 1), 1), end + 1
+		}
+	}
+	return keyOther, end + 1
+}
+
+type inputFilter struct {
+	pendingQ   []byte
+	lastCancel time.Time
+	now        func() time.Time
+}
+
+func (f *inputFilter) feed(b []byte) ([]byte, bool) {
+	out := make([]byte, 0, len(b)+8)
+	for len(b) > 0 {
+		k, size := nextKey(b)
+		raw := b[:size]
+		b = b[size:]
+		if f.pendingQ != nil {
+			if k == keyQ {
+				return out, true
+			}
+			if k == keyRelease {
+				continue
+			}
+			out = append(out, f.pendingQ...)
+			f.pendingQ = nil
+		}
+		switch k {
+		case keyCtrlQ:
+			f.pendingQ = append([]byte{}, raw...)
+		case keyCtrlD, keyRelease:
+		case keyCtrlC:
+			if f.now().Sub(f.lastCancel) >= cancelEvery {
+				f.lastCancel = f.now()
+				out = append(out, raw...)
+			}
+		default:
+			out = append(out, raw...)
+		}
+	}
+	return out, false
+}
 
 func forwardStdin(w io.WriteCloser, client *ssh.Client) {
 	buf := make([]byte, 4096)
-	escape := false
+	f := &inputFilter{now: time.Now}
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			w.Close()
 			return
 		}
-		out := make([]byte, 0, n+1)
-		for _, b := range buf[:n] {
-			switch {
-			case escape && b == 'q':
-				client.Close()
-				return
-			case escape:
-				out = append(out, ctrlQ, b)
-				escape = false
-			case b == ctrlQ:
-				escape = true
-			default:
-				out = append(out, b)
-			}
+		out, quit := f.feed(buf[:n])
+		if quit {
+			client.Close()
+			return
 		}
 		if _, err := w.Write(out); err != nil {
 			return

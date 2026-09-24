@@ -11,9 +11,30 @@ Ctrl-Q  1           "Let in Ada Lovelace · tiger-lamp": check the code matches,
 
 ## The Ctrl-Q menu
 
-Inside a session, `Ctrl-Q` opens a menu with: share or copy the link again, let in a waiting guest (shown with their code), turn one away, kick a guest, stop sharing, detach. tmux handles the key before the command sees it, so nothing reaches Claude's conversation. Ctrl-Q is the same key on German and English layouts, and Claude Code doesn't use it. Guests pressing it get nothing.
+Inside a session, `Ctrl-Q` opens a menu: share or copy the join command again, let in a waiting guest (shown with their code), turn one away, kick a guest, stop sharing, detach (`q`), end the session (`x`). tmux handles the key before the command sees it, so nothing reaches Claude's conversation. Ctrl-Q is the same key on German and English layouts, and Claude Code doesn't use it.
 
 The same actions exist as commands (below) for use from another terminal.
+
+## Keys and endings
+
+You own the session; guests can only leave.
+
+| | Host | Guest |
+|---|---|---|
+| Esc / Ctrl-C | as usual | as usual, but at most one Ctrl-C every 3s reaches the session, so a double tap can't quit Claude |
+| Ctrl-D | as usual | ignored |
+| Ctrl-Q | menu | — |
+| Ctrl-Q q | detach, the session keeps running | leave |
+
+| What happens | Session | Sharing | Guest sees |
+|---|---|---|---|
+| guest leaves or closes their terminal | keeps running | on | — |
+| host detaches or closes the terminal | keeps running | stops | "The host left, so sharing stopped." |
+| host quits the command, or End session | ends | ends | "The host ended the session." |
+| Stop sharing | keeps running | stops | "The host stopped sharing." |
+| Kick | keeps running | on | "The host removed you." |
+
+The shared window always has the host's terminal size. Guests with a bigger terminal see blank space around it; with a smaller one they see the top-left part.
 
 ## Install
 

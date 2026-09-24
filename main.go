@@ -69,6 +69,8 @@ func main() {
 		cmdAct(args)
 	case "_fit":
 		cmdFit(args)
+	case "_detached":
+		cmdDetached(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:
