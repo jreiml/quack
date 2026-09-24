@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,29 +89,54 @@ func guestTTYs(s server) map[string]bool {
 	return m
 }
 
+func statusEscape(s string) string {
+	return strings.NewReplacer("#", "##", ",", "#,", "}", "#}").Replace(s)
+}
+
+func statusLine(segments []string) string {
+	return strings.Join(segments, "   ")
+}
+
 func refreshStatus(s server) {
-	var parts []string
-	var names []string
-	seen := map[string]bool{}
-	for _, g := range guests(s) {
-		if !seen[g.name] {
-			seen[g.name] = true
-			names = append(names, g.name)
+	gs := guests(s)
+	shared := s.shared()
+	ws := waiting(s)
+	namesExcept := func(tty string) []string {
+		var names []string
+		seen := map[string]bool{}
+		for _, g := range gs {
+			if g.tty != tty && !seen[g.name] {
+				seen[g.name] = true
+				names = append(names, g.name)
+			}
 		}
+		return names
 	}
-	if len(names) > 0 {
-		parts = append(parts, "👀 "+strings.Join(names, ", "))
+	host := []string{"🦆 Ctrl-Q"}
+	if shared {
+		host = append(host, statusEscape("🌐 Shared, "+modeLabel(s)))
 	}
-	for _, w := range waiting(s) {
-		parts = append(parts, fmt.Sprintf("⏳ %s is waiting · %s · Ctrl-Q to let them in", w.name, w.code))
+	if names := namesExcept(""); len(names) > 0 {
+		host = append(host, statusEscape("👀 "+strings.Join(names, ", ")))
 	}
-	if len(parts) == 0 {
-		s.must("set-option", "-g", "status", "off")
-		fitHost(s)
-		return
+	for _, w := range ws {
+		host = append(host, "#[bg=colour220#,fg=colour16] "+statusEscape(fmt.Sprintf("✋ %s wants to join (code %s)", w.name, w.code))+" #[default]")
 	}
-	s.must("set-option", "-g", "status-left", " "+strings.ReplaceAll(strings.Join(parts, "    "), "#", "##")+" ")
-	s.must("set-option", "-g", "status", "on")
+	format := statusLine(host)
+	for id, note := range s.opts("note_") {
+		format = fmt.Sprintf("#{?#{==:#{client_tty},/dev/%s},%s,%s}", id, statusLine(append(slices.Clone(host), statusEscape(note))), format)
+	}
+	for _, g := range gs {
+		guest := []string{"🦆 Ctrl-Q"}
+		if h := s.get("host"); h != "" {
+			guest = append(guest, statusEscape("🏠 "+h))
+		}
+		if names := namesExcept(g.tty); len(names) > 0 {
+			guest = append(guest, statusEscape("👀 "+strings.Join(names, ", ")))
+		}
+		format = fmt.Sprintf("#{?#{==:#{client_tty},%s},%s,%s}", g.tty, statusLine(guest), format)
+	}
+	s.must("set-option", "-g", "status-left", " "+format+" ")
 	fitHost(s)
 }
 
@@ -162,10 +188,21 @@ func cmdGate(args []string) {
 	}
 
 	if s.get("ok_"+hex) == "" {
+		if admitted, last := autoAdmit(s, hex, who); admitted {
+			logger.Printf("%s (%s) auto-approved", who, code)
+			if last {
+				if err := notify(who + " got in with the one-time spot. New people need your OK again."); err != nil {
+					logger.Printf("notify: %v", err)
+				}
+			}
+		}
+	}
+
+	if s.get("ok_"+hex) == "" {
 		s.set("wait_"+hex, code+"|"+who)
 		refreshStatus(s)
 		logger.Printf("%s (%s) waiting", who, code)
-		if err := notify(fmt.Sprintf("%s wants to join %s · %s · Ctrl-Q to let them in", who, s.name, code)); err != nil {
+		if err := notify(fmt.Sprintf("%s wants to join %s (code %s). Ctrl-Q to answer.", who, s.name, code)); err != nil {
 			logger.Printf("notify: %v", err)
 		}
 		fmt.Printf("\r\n  Waiting for the host to let you in.\r\n  Send them this code:  %s\r\n\r\n  Ctrl-C cancels.\r\n", code)
@@ -275,28 +312,11 @@ func admit(e entry) {
 	e.s.must("wait-for", "-S", channel(e.hex))
 }
 
-func kickHex(s server, hex, reason string) {
-	s.set("bye_"+hex, reason)
-	s.run("set-option", "-gu", "@quack_ok_"+hex)
-	for _, g := range guests(s) {
-		if g.hex == hex {
-			if err := syscall.Kill(-g.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
-				fatalf("hanging up %s: %v", g.name, err)
-			}
-		}
-	}
-	if s.get("wait_"+hex) != "" {
-		s.unset("wait_" + hex)
-		s.must("wait-for", "-S", channel(hex))
-	}
-	refreshStatus(s)
-}
-
-func byeFor(e entry) string {
-	if e.tty == "" {
-		return "The host declined."
-	}
-	return "The host removed you."
+func decline(e entry) {
+	e.s.set("bye_"+e.hex, "The host declined.")
+	e.s.unset("wait_" + e.hex)
+	e.s.must("wait-for", "-S", channel(e.hex))
+	refreshStatus(e.s)
 }
 
 func sayBye(s server, hex, fallback string) {
@@ -326,34 +346,18 @@ func cmdAllow(args []string) {
 	fmt.Fprintf(os.Stderr, "let %s into %s\n", e.name, e.s.name)
 }
 
-func cmdKick(args []string) {
-	var candidates []entry
-	if name := os.Getenv("QUACK_SESSION"); name != "" && (server{name}).alive() {
-		s := server{name}
-		candidates = append(guests(s), waiting(s)...)
-	} else {
-		candidates = append(allEntries(guests), allEntries(waiting)...)
-	}
-	who := strings.ToLower(strings.Join(args, " "))
-	var match []entry
-	for _, e := range candidates {
-		if who == "" || e.code == normalizeCode(args) || strings.Contains(strings.ToLower(e.name), who) {
-			match = append(match, e)
+func cmdDecline(args []string) {
+	all := allEntries(waiting)
+	if len(args) == 0 {
+		if len(all) == 0 {
+			fatalf("nobody is waiting")
 		}
+		fatalf("usage: quack decline <code>\nwaiting:\n%s", describeEntries(all))
 	}
-	switch {
-	case len(candidates) == 0:
-		fatalf("nobody to kick")
-	case len(match) == 0:
-		fatalf("no guest matches %q:\n%s", who, describeEntries(candidates))
+	e, err := findWaiting(all, normalizeCode(args))
+	if err != nil {
+		fatalf("%v", err)
 	}
-	hexes := map[string]bool{}
-	for _, e := range match {
-		hexes[e.hex] = true
-	}
-	if len(hexes) > 1 {
-		fatalf("several people match; be more specific:\n%s", describeEntries(match))
-	}
-	kickHex(match[0].s, match[0].hex, byeFor(match[0]))
-	fmt.Fprintf(os.Stderr, "kicked %s\n", match[0].name)
+	decline(e)
+	fmt.Fprintf(os.Stderr, "turned %s away from %s\n", e.name, e.s.name)
 }

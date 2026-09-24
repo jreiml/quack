@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -17,44 +19,98 @@ import (
 
 	"github.com/tailscale/tailcat"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 )
 
-func clientKeyPath() string {
+const keyMaxAge = 30 * 24 * time.Hour
+
+func keyDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fatalf("%v", err)
 	}
-	return filepath.Join(home, ".config", "quack", "client.key")
+	return filepath.Join(home, ".config", "quack", "keys")
 }
 
-func clientKey() key.NodePrivate {
-	p := clientKeyPath()
-	var k key.NodePrivate
-	b, err := os.ReadFile(p)
-	if err == nil {
-		if err := k.UnmarshalText([]byte(strings.TrimSpace(string(b)))); err != nil {
-			fatalf("reading %s: %v", p, err)
-		}
-		return k
+func clientKeyPath(addr string, slot int) string {
+	sum := sha256.Sum256([]byte(addr))
+	name := hex.EncodeToString(sum[:8])
+	if slot > 1 {
+		name += fmt.Sprintf("-%d", slot)
 	}
-	if !os.IsNotExist(err) {
-		fatalf("%v", err)
-	}
-	k = key.NewNode()
-	text, err := k.MarshalText()
+	return filepath.Join(keyDir(), name+".key")
+}
+
+func pruneKeys() {
+	entries, err := os.ReadDir(keyDir())
 	if err != nil {
 		fatalf("%v", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < keyMaxAge {
+			continue
+		}
+		p := filepath.Join(keyDir(), e.Name())
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		if unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) == nil {
+			os.Remove(p)
+		}
+		f.Close()
+	}
+}
+
+var heldKey *os.File
+
+func clientKey(addr string) key.NodePrivate {
+	if err := os.MkdirAll(keyDir(), 0o700); err != nil {
 		fatalf("%v", err)
 	}
-	if err := os.WriteFile(p, append(text, '\n'), 0o600); err != nil {
-		fatalf("%v", err)
+	pruneKeys()
+	for slot := 1; ; slot++ {
+		p := clientKeyPath(addr, slot)
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == unix.EWOULDBLOCK {
+			f.Close()
+			continue
+		} else if err != nil {
+			fatalf("locking %s: %v", p, err)
+		}
+		heldKey = f
+		now := time.Now()
+		if err := os.Chtimes(p, now, now); err != nil {
+			fatalf("%v", err)
+		}
+		b, err := io.ReadAll(f)
+		if err != nil {
+			fatalf("reading %s: %v", p, err)
+		}
+		var k key.NodePrivate
+		if text := strings.TrimSpace(string(b)); text != "" {
+			if err := k.UnmarshalText([]byte(text)); err != nil {
+				fatalf("reading %s: %v", p, err)
+			}
+			return k
+		}
+		k = key.NewNode()
+		text, err := k.MarshalText()
+		if err != nil {
+			fatalf("%v", err)
+		}
+		if _, err := f.Write(append(text, '\n')); err != nil {
+			fatalf("writing %s: %v", p, err)
+		}
+		return k
 	}
-	return k
 }
 
 func displayName() string {
@@ -83,7 +139,7 @@ func cmdJoin(args []string) {
 	if !isTTY() {
 		fatalf("join needs a terminal")
 	}
-	k := clientKey()
+	k := clientKey(addr)
 	fmt.Fprintf(os.Stderr, "connecting… your code is %s\n", codeFor(k.Public().String()))
 
 	cl := &tailcat.Client{Server: tailcat.Addr(addr), Key: k, Logf: logger.Discard}

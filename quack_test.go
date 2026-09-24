@@ -5,9 +5,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/types/key"
 )
 
 func TestCodeWords(t *testing.T) {
@@ -160,7 +163,7 @@ func TestSessions(t *testing.T) {
 		t.Fatalf("new printed %q", name)
 	}
 	s := server{name}
-	if got := s.must("show-options", "-gv", "status"); got != "off" {
+	if got := s.must("show-options", "-gv", "status"); got != "on" {
 		t.Errorf("status = %q", got)
 	}
 	if got := s.must("show-options", "-gv", "prefix"); got != "None" {
@@ -186,20 +189,113 @@ func TestSessionEndsWithCommand(t *testing.T) {
 	}
 }
 
+func TestTerminalClose(t *testing.T) {
+	outer := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "outer-close")}
+	defer exec.Command(tmuxBin(), "-S", outer.sock, "kill-server").Run()
+	host := func(s server) {
+		outer.tmux("new-session", "-d", "-s", s.name, "-x", "100", "-y", "30", bin+" attach "+s.name+"; sleep 60")
+		eventually(t, "host to attach", func() bool { return hostAttached(s) })
+	}
+
+	closed := server{quack(t, "new", "-n", "t-close", "--", "sleep", "300")}
+	host(closed)
+	outer.tmux("kill-session", "-t", closed.name)
+	eventually(t, "closing the terminal to end the session", func() bool { return !closed.alive() })
+
+	for _, away := range []bool{false, true} {
+		s := server{quack(t, "new", "-n", "t-keep", "--", "sleep", "300")}
+		host(s)
+		if away {
+			s.set("away", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		} else {
+			quack(t, "detach", s.name)
+			eventually(t, "host to detach", func() bool { return !hostAttached(s) })
+		}
+		outer.tmux("kill-session", "-t", s.name)
+		time.Sleep(2 * time.Second)
+		if !s.alive() {
+			t.Errorf("away=%v: session ended", away)
+		}
+		s.run("kill-server")
+	}
+}
+
 func TestStatusLine(t *testing.T) {
 	s := server{quack(t, "new", "-n", "t-status", "--", "sleep", "300")}
 	defer s.run("kill-server")
+	if got := s.must("show-options", "-gv", "status-left"); strings.TrimSpace(got) != "🦆 Ctrl-Q" {
+		t.Errorf("private status-left = %q", got)
+	}
 	s.set("wait_"+strings.Repeat("ab", 32), "tiger-lamp|Ada #1")
 	refreshStatus(s)
-	if got := s.must("show-options", "-gv", "status"); got != "on" {
-		t.Errorf("status = %q with a waiting guest", got)
-	}
-	if got := s.must("show-options", "-gv", "status-left"); !strings.Contains(got, "Ada ##1 is waiting") || !strings.Contains(got, "tiger-lamp · Ctrl-Q") {
+	if got := s.must("show-options", "-gv", "status-left"); !strings.Contains(got, "🦆 Ctrl-Q") || !strings.Contains(got, "✋ Ada ##1 wants to join (code tiger-lamp)") {
 		t.Errorf("status-left = %q", got)
 	}
 	s.unset("wait_" + strings.Repeat("ab", 32))
 	refreshStatus(s)
-	if got := s.must("show-options", "-gv", "status"); got != "off" {
-		t.Errorf("status = %q with nobody around", got)
+	if got := s.must("show-options", "-gv", "status-left"); strings.TrimSpace(got) != "🦆 Ctrl-Q" {
+		t.Errorf("status-left = %q with nobody around", got)
+	}
+}
+
+func TestAutoApprove(t *testing.T) {
+	s := server{quack(t, "new", "-n", "t-auto", "--", "sleep", "300")}
+	defer s.run("kill-server")
+	waiter := strings.Repeat("cd", 32)
+	s.set("wait_"+waiter, "tiger-lamp|Ada")
+	setAuto(s, 2, time.Hour)
+	if s.get("ok_"+waiter) != "Ada" || len(waiting(s)) != 0 {
+		t.Fatalf("waiting guest not admitted when auto-approve started")
+	}
+	if got := modeLabel(s); !strings.HasPrefix(got, "next one joins until") {
+		t.Errorf("mode = %q", got)
+	}
+	if !autoTake(s) {
+		t.Fatalf("second person refused with 1 left")
+	}
+	if autoTake(s) || s.get("auto") != "" {
+		t.Errorf("limit not enforced")
+	}
+	if s.get("away") == "" {
+		t.Errorf("share stopped staying on after the limit was used")
+	}
+
+	setAuto(s, 0, -time.Second)
+	if autoTake(s) || s.get("auto") != "" {
+		t.Errorf("expired auto-approve still admits")
+	}
+
+	setAuto(s, 0, time.Hour)
+	closeAuto(s)
+	if s.get("away") != "" {
+		t.Errorf("close left the share running unattended")
+	}
+}
+
+func TestClientKeyPerLink(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	take := func(addr string) (key.NodePrivate, *os.File) {
+		k := clientKey(addr)
+		return k, heldKey
+	}
+	a, fa := take("tcA")
+	b, fb := take("tcB")
+	c, fc := take("tcC")
+	a2, fa2 := take("tcA")
+	if a.Equal(b) || b.Equal(c) || a.Equal(a2) {
+		t.Fatalf("links or parallel joins share a key")
+	}
+	for _, f := range []*os.File{fa, fb, fc, fa2} {
+		f.Close()
+	}
+	for _, want := range []struct {
+		addr string
+		k    key.NodePrivate
+	}{{"tcC", c}, {"tcA", a}, {"tcB", b}} {
+		got, f := take(want.addr)
+		if !got.Equal(want.k) {
+			t.Errorf("reconnecting to %s got a different key", want.addr)
+		}
+		f.Close()
 	}
 }

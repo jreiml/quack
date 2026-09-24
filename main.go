@@ -11,22 +11,27 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack ls                            list sessions
   quack attach [name]                 reattach (default: most recent)
   quack detach [name]                 detach your terminals, keep the session running
-  quack share [name]                  share and copy the join message
+  quack share [name]                  share and copy the join command; guests need your approval
+      --auto-approve                  let people in without asking (runs on after you detach)
+      --limit N                       only the first N people, then ask again
+      --expires 2h                    stop auto-approving after this long (default 24h)
+  quack close [name]                  back to asking first
   quack allow <code>                  let a waiting guest in
-  quack kick [who]                    disconnect a guest or turn away a waiting one
-  quack unshare [name]                stop sharing; the link stops working
+  quack decline <code>                turn away a waiting guest
+  quack unshare [name]                stop sharing; everyone is disconnected and the link stops working
   quack stop [name]                   end the session
   quack join <link>                   join someone's session (Ctrl-Q q leaves)
 
-Inside a session, Ctrl-Q opens the quack menu (share, allow, kick, unshare, detach).
+Inside a session, Ctrl-Q opens the quack menu (share, let in, who new people get in, stop sharing, detach).
 `
 
 var onFatal func(msg string)
 
 func fatalf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	if onFatal != nil {
-		onFatal(msg)
+	if f := onFatal; f != nil {
+		onFatal = nil
+		f(msg)
 	}
 	fmt.Fprintln(os.Stderr, "quack: "+msg)
 	os.Exit(1)
@@ -51,8 +56,10 @@ func main() {
 		cmdShare(args)
 	case "allow":
 		cmdAllow(args)
-	case "kick":
-		cmdKick(args)
+	case "decline":
+		cmdDecline(args)
+	case "close":
+		cmdClose(args)
 	case "unshare":
 		cmdUnshare(args)
 	case "stop":

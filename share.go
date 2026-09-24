@@ -45,10 +45,12 @@ func startShare(s server) string {
 	}
 	s.unset("addr")
 	s.unset("error")
+	s.set("host", displayName())
 	s.must("new-session", "-d", "-s", "_serve", "--", quackBin(), "_serve", s.name)
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if addr := s.get("addr"); addr != "" {
+			refreshStatus(s)
 			return addr
 		}
 		if msg := s.get("error"); msg != "" {
@@ -84,12 +86,69 @@ func copyToClipboard(text string) bool {
 }
 
 func cmdShare(args []string) {
-	s := target(args, true)
+	auto, limit, expires := false, 0, defaultExpiry
+	limitSet, expiresSet := false, false
+	var rest []string
+	for len(args) > 0 {
+		flag, val, hasVal := strings.Cut(args[0], "=")
+		value := func() string {
+			if hasVal {
+				args = args[1:]
+				return val
+			}
+			if len(args) < 2 {
+				fatalf("%s needs a value", flag)
+			}
+			v := args[1]
+			args = args[2:]
+			return v
+		}
+		switch flag {
+		case "--auto-approve":
+			auto = true
+			args = args[1:]
+		case "--limit":
+			n, err := strconv.Atoi(value())
+			if err != nil || n < 1 {
+				fatalf("--limit needs a number of people, 1 or more")
+			}
+			limit, limitSet = n, true
+		case "--expires":
+			d, err := time.ParseDuration(value())
+			if err != nil || d <= 0 {
+				fatalf("--expires needs a duration like 2h or 30m")
+			}
+			expires, expiresSet = d, true
+		default:
+			if strings.HasPrefix(flag, "-") {
+				fatalf("unknown flag %q", flag)
+			}
+			rest = append(rest, args[0])
+			args = args[1:]
+		}
+	}
+	if (limitSet || expiresSet) && !auto {
+		fatalf("--limit and --expires only work with --auto-approve")
+	}
+	s := target(rest, true)
 	msg := joinMessage(startShare(s))
+	if auto {
+		setAuto(s, limit, expires)
+	}
 	fmt.Println(msg)
 	if copyToClipboard(msg) {
 		fmt.Fprintln(os.Stderr, "(copied to clipboard)")
 	}
+	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, describeMode(s))
+}
+
+func cmdClose(args []string) {
+	s := target(args, true)
+	if !s.shared() {
+		fatalf("%s is not shared", s.name)
+	}
+	closeAuto(s)
+	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, describeMode(s))
 }
 
 func cmdUnshare(args []string) {
@@ -123,6 +182,8 @@ func unshare(s server, reason string) {
 	for id := range s.opts("guest_") {
 		s.unset("guest_" + id)
 	}
+	s.run("set-option", "-gu", "@quack_auto")
+	s.run("set-option", "-gu", "@quack_away")
 	s.unset("addr")
 	refreshStatus(s)
 }
@@ -150,6 +211,7 @@ func cmdServe(args []string) {
 	var mu sync.Mutex
 	open := map[*watchedConn]bool{}
 	go shutdownOnSignal(srv, &mu, open, logger)
+	go expireLoop(s, logger)
 	for {
 		c, err := ln.Accept()
 		if err != nil {

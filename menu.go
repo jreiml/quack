@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func serverFromSocket(path string) server {
@@ -31,36 +32,60 @@ func cmdMenu(args []string) {
 	}
 	items := []string{"display-menu", "-c", tty, "-x", "C", "-y", "C", "-T", "#[align=centre] quack · " + s.name + " "}
 	add := func(label, key, cmd string) { items = append(items, label, key, cmd) }
+	auto := s.get("auto")
+	until, away := awayUntil(s)
 	if !s.shared() {
-		add("Share (copy join command)", "s", act("share"))
-	} else {
-		add("Copy join command again", "s", act("share"))
-		ws := waiting(s)
-		for i, w := range ws {
-			key := ""
-			if i < 9 {
-				key = strconv.Itoa(i + 1)
-			}
-			add("Let in "+w.name+" · "+w.code, key, act("allow", w.hex))
+		add("Share, ask first", "s", act("share"))
+		add("Share, next one joins", "o", act("share-auto", "1"))
+		add("Share, anyone joins", "e", act("share-auto", "0"))
+		add("", "", "")
+		add("Detach (keeps running)", "q", act("detach"))
+		add("End session", "x", act("end"))
+		s.must(items...)
+		return
+	}
+	add("Copy join link", "s", act("share"))
+	ws := waiting(s)
+	if len(ws) > 0 {
+		add("", "", "")
+	}
+	for i, w := range ws {
+		key := ""
+		if i < 9 {
+			key = strconv.Itoa(i + 1)
 		}
-		if len(ws) > 0 {
-			add("", "", "")
-		}
-		seen := map[string]bool{}
-		for _, g := range guests(s) {
-			if seen[g.hex] {
-				continue
-			}
-			seen[g.hex] = true
-			add("Kick "+g.name, "", act("kick", g.hex))
-		}
-		for _, w := range ws {
-			add("Turn away "+w.name+" ("+w.code+")", "", act("kick", w.hex))
-		}
-		add("Stop sharing", "u", act("unshare"))
+		add("Let "+w.name+" in ("+w.code+")", key, act("allow", w.hex))
+	}
+	for _, w := range ws {
+		add("Turn "+w.name+" away", "", act("decline", w.hex))
 	}
 	add("", "", "")
-	add("Detach (keeps running)", "q", act("detach"))
+	add("-New people", "", "")
+	mode := func(current bool, label, key, cmd string) {
+		if current {
+			add("-✓ "+label, "", "")
+			return
+		}
+		add("  "+label, key, cmd)
+	}
+	mode(auto == "", "ask first", "m", act("close"))
+	oneLabel := "next one joins"
+	if auto != "" && auto != "any" {
+		oneLabel = modeLabel(s)
+	}
+	mode(auto != "" && auto != "any", oneLabel, "o", act("share-auto", "1"))
+	anyLabel := "anyone joins"
+	if auto == "any" {
+		anyLabel = modeLabel(s)
+	}
+	mode(auto == "any", anyLabel, "e", act("share-auto", "0"))
+	add("", "", "")
+	add("Stop sharing", "u", act("unshare"))
+	if away {
+		add("Detach (sharing stays on until "+clock(until)+")", "q", act("detach"))
+	} else {
+		add("Detach (sharing stops)", "q", act("detach"))
+	}
 	add("End session", "x", act("end"))
 	s.must(items...)
 }
@@ -71,18 +96,36 @@ func cmdAct(args []string) {
 	}
 	s, tty, action, rest := server{args[0]}, args[1], args[2], args[3:]
 	say := func(msg string) {
-		s.run("display-message", "-c", tty, "-d", "5000", strings.ReplaceAll(msg, "#", "##"))
-	}
-	onFatal = func(msg string) { say("quack: " + strings.SplitN(msg, "\n", 2)[0]) }
-	switch action {
-	case "share":
-		msg := joinMessage(startShare(s))
-		if copyToClipboard(msg) {
-			say("quack: join command copied, paste it to your guest")
-			return
+		note := "note_" + filepath.Base(tty)
+		s.set(note, msg)
+		refreshStatus(s)
+		time.Sleep(3 * time.Second)
+		if s.alive() && s.get(note) == msg {
+			s.unset(note)
+			refreshStatus(s)
 		}
-		s.must("set-buffer", "-w", msg)
-		say("quack: join command copied (via terminal clipboard)")
+	}
+	onFatal = func(msg string) { say("⚠️  " + strings.SplitN(msg, "\n", 2)[0]) }
+	switch action {
+	case "share", "share-auto":
+		msg := joinMessage(startShare(s))
+		if action == "share-auto" {
+			if len(rest) != 1 {
+				fatalf("share-auto needs a limit")
+			}
+			limit, err := strconv.Atoi(rest[0])
+			if err != nil {
+				fatalf("bad limit %q", rest[0])
+			}
+			setAuto(s, limit, defaultExpiry)
+		}
+		if !copyToClipboard(msg) {
+			s.must("set-buffer", "-w", msg)
+		}
+		say("🔗 Join link copied")
+	case "close":
+		closeAuto(s)
+		say("✋ New people need your OK")
 	case "allow":
 		if len(rest) != 1 {
 			fatalf("allow needs a key")
@@ -90,32 +133,26 @@ func cmdAct(args []string) {
 		for _, e := range waiting(s) {
 			if e.hex == rest[0] {
 				admit(e)
-				say("quack: let " + e.name + " in")
+				say("✅ Let " + e.name + " in")
 				return
 			}
 		}
 		fatalf("they stopped waiting")
-	case "kick":
+	case "decline":
 		if len(rest) != 1 {
-			fatalf("kick needs a key")
+			fatalf("decline needs a key")
 		}
-		name := ""
-		for _, e := range append(guests(s), waiting(s)...) {
-			if e.hex == rest[0] {
-				name = e.name
-			}
-		}
-		reason := "The host removed you."
 		for _, e := range waiting(s) {
 			if e.hex == rest[0] {
-				reason = "The host declined."
+				decline(e)
+				say("👋 Turned " + e.name + " away")
+				return
 			}
 		}
-		kickHex(s, rest[0], reason)
-		say("quack: kicked " + name)
+		fatalf("they stopped waiting")
 	case "unshare":
 		unshare(s, "The host stopped sharing.")
-		say("quack: stopped sharing, the link is dead")
+		say("🔒 Stopped sharing")
 	case "detach":
 		s.must("detach-client", "-t", tty)
 	case "leave":
@@ -139,14 +176,8 @@ func cmdDetached(args []string) {
 		fatalf("usage: quack _detached <socket>")
 	}
 	s := serverFromSocket(args[0])
-	if !s.alive() || !s.shared() {
+	if !s.alive() || !s.shared() || s.get("away") != "" || hostAttached(s) {
 		return
-	}
-	guests := guestTTYs(s)
-	for _, tty := range strings.Fields(s.must("list-clients", "-t", "=main", "-F", "#{client_tty}")) {
-		if !guests[tty] {
-			return
-		}
 	}
 	unshare(s, "The host left, so sharing stopped.")
 }

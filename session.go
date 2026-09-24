@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -89,7 +91,7 @@ func cmdNew(args []string) {
 	writeConfig()
 	create := []string{"new-session", "-d", "-s", "main", "-c", dir, "-e", "QUACK_SESSION=" + name}
 	if w, h, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
-		create = append(create, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h))
+		create = append(create, "-x", strconv.Itoa(w), "-y", strconv.Itoa(max(h-1, 1)))
 	}
 	create = append(create, "--", bin)
 	s.must(append(create, args[1:]...)...)
@@ -106,10 +108,44 @@ func cmdNew(args []string) {
 }
 
 func attach(s server) {
-	a := s.argv("attach-session", "-t", "=main")
-	if err := syscall.Exec(a[0], a, cleanEnv()); err != nil {
-		fatalf("exec tmux: %v", err)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	c := s.cmd("attach-session", "-t", "=main")
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	err := c.Run()
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		fatalf("tmux attach: %v", err)
 	}
+	wait := time.Duration(0)
+	if err != nil {
+		wait = time.Second
+	}
+	select {
+	case <-hup:
+		terminalClosed(s)
+	case <-time.After(wait):
+	}
+	if exit != nil {
+		os.Exit(exit.ExitCode())
+	}
+}
+
+func hostAttached(s server) bool {
+	guests := guestTTYs(s)
+	for _, tty := range strings.Fields(s.must("list-clients", "-t", "=main", "-F", "#{client_tty}")) {
+		if !guests[tty] {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalClosed(s server) {
+	if !s.alive() || s.get("away") != "" || hostAttached(s) {
+		return
+	}
+	s.must("kill-server")
 }
 
 func cmdAttach(args []string) {
@@ -154,10 +190,11 @@ type info struct {
 	guests  int
 	waiting int
 	shared  bool
+	auto    bool
 }
 
 func describe(s server) info {
-	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir"), shared: s.shared()}
+	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir"), shared: s.shared(), auto: s.get("auto") != ""}
 	if ts, err := strconv.ParseInt(s.must("display-message", "-p", "-t", "=main:", "#{session_created}"), 10, 64); err == nil {
 		i.created = time.Unix(ts, 0)
 	}
@@ -210,6 +247,9 @@ func (i info) state() string {
 	}
 	if i.shared {
 		parts = append(parts, "shared")
+	}
+	if i.auto {
+		parts = append(parts, "auto-approve")
 	}
 	if i.guests > 0 {
 		parts = append(parts, plural(i.guests, "guest"))
