@@ -12,7 +12,7 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack attach [name]                 reattach (default: most recent)
   quack detach [name]                 detach your terminals, keep the session running
   quack share [name]                  create and copy a new terminal invite; approval required
-      --pair                          create a Claude invite instead
+      --pair                          create an agent invite instead
       --auto-approve                  let people in without asking (runs on after you detach)
       --limit N                       only the first N connections, then reject new ones
       --expires 2h                    revoke and disconnect after this long; use never for no expiry
@@ -22,11 +22,12 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack decline <code>                turn away a waiting guest
   quack unshare [name]                stop sharing; everyone is disconnected and the link stops working
   quack stop [name]                   end the session
-  quack pair <link>                   pair Claude agents (run inside Claude with !)
+  quack pair <link>                   pair Claude or Codex agents (run inside your agent)
+  quack send <name> --message <text>  send to a paired agent from Codex
   quack unpair [name]                 end an agent pairing
   quack join <link>                   join someone's session (Ctrl-Q q leaves)
 
-Inside a session, Ctrl-Q opens the quack menu (invite to terminal, invite a Claude, manage access, detach).
+Inside a session, Ctrl-Q opens the quack menu (invite to terminal, invite an agent, manage access, detach).
 `
 
 var onFatal func(msg string)
@@ -72,6 +73,8 @@ func main() {
 		cmdJoin(args)
 	case "pair":
 		cmdPair(args)
+	case "send":
+		cmdSend(args)
 	case "unpair":
 		cmdUnpair(args)
 	case "_pair":

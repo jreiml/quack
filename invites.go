@@ -135,7 +135,7 @@ func (i invite) expired() bool { return i.Expires != 0 && time.Now().Unix() >= i
 func (i invite) label() string {
 	kind := "Terminal"
 	if i.Kind == "pair" {
-		kind = "Claude"
+		kind = "Agent"
 	}
 	policy := "ask first"
 	switch {

@@ -45,22 +45,30 @@ func sessionIdentity(a claudeEndpoint, owner string) (agentIdentity, error) {
 		return agentIdentity{}, err
 	}
 	sum := sha256.Sum256([]byte("quack-session-v1\x00" + token + "\x00" + strconv.Itoa(a.PID) + "\x00" + a.Start))
-	parents, err := processParents()
+	base, err := sessionBase(a.PID)
 	if err != nil {
 		return agentIdentity{}, err
+	}
+	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner)}, nil
+}
+
+func sessionBase(pid int) (string, error) {
+	parents, err := processParents()
+	if err != nil {
+		return "", err
 	}
 	base := ""
 	for _, s := range servers() {
 		panes, err := s.run("list-panes", "-t", "=main", "-F", "#{pane_pid}")
 		if err != nil {
-			return agentIdentity{}, err
+			return "", err
 		}
 		for _, pane := range strings.Fields(panes) {
 			root, err := strconv.Atoi(pane)
 			if err != nil {
-				return agentIdentity{}, err
+				return "", err
 			}
-			if descendsFrom(a.PID, root, parents) {
+			if descendsFrom(pid, root, parents) {
 				base = s.name
 				break
 			}
@@ -69,13 +77,13 @@ func sessionIdentity(a claudeEndpoint, owner string) (agentIdentity, error) {
 			break
 		}
 	}
-	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner)}, nil
+	return base, nil
 }
 
 func (b *pairInbox) claimName(peer agentIdentity) (string, error) {
 	name := peer.Name
 	for attempt := 0; attempt < 10; attempt++ {
-		path := filepath.Join(claudeSessions(), ".quack-"+name+".claim")
+		path := filepath.Join(b.record.registry(), ".quack-"+name+".claim")
 		occupied, err := inboxNameTaken(name)
 		if err != nil {
 			return "", err

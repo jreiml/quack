@@ -131,7 +131,7 @@ func TestNetInviteIsolation(t *testing.T) {
 	g.join(terminalLink)
 	eventually(t, "terminal admitted", func() bool { return attached(s) })
 	g.tmux("send-keys", "-t", "host", "C-q")
-	eventually(t, "host invite menu", func() bool { return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "Invite a Claude") })
+	eventually(t, "host invite menu", func() bool { return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "Invite an agent") })
 	g.tmux("send-keys", "-t", "host", "c")
 	eventually(t, "Claude invite chooser", func() bool {
 		return strings.Contains(g.tmux("capture-pane", "-p", "-t", "host"), "allow one connection")
@@ -224,7 +224,7 @@ func TestInviteMenus(t *testing.T) {
 	keys("m")
 	shown("Stop all agent messaging")
 	keys("c")
-	shown("Revoke Claude invites and disconnect all pairs")
+	shown("Revoke agent invites and disconnect all pairs")
 	keys("y")
 	eventually(t, "confirmed revocation", func() bool { v, _ := loadInvite(s, i.ID); return v.State == "revoked" })
 }

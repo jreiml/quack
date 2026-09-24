@@ -104,7 +104,11 @@ func (r *pairRate) take(now time.Time) bool {
 
 func pairPrompt(b *pairInbox) string {
 	peer := b.record.Identity
-	return fmt.Sprintf("You can collaborate with %s, a Claude session belonging to %s. Your humans are working together. Continue your current task. Use SendMessage to %q when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, b.record.Name, b.record.Name)
+	instruction := fmt.Sprintf("Use SendMessage to %q", b.record.Name)
+	if b.record.Codex != nil {
+		instruction = fmt.Sprintf("Use quack send %s --message <text> through your shell tool", b.record.Name)
+	}
+	return fmt.Sprintf("You can collaborate with %s, an agent session belonging to %s. Your humans are working together. Continue your current task. %s when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, instruction, b.record.Name)
 }
 
 func pairNotice(b *pairInbox, peer, text string) {
@@ -112,7 +116,7 @@ func pairNotice(b *pairInbox, peer, text string) {
 	if b.record.Identity.valid() {
 		name = b.record.Identity.label()
 	}
-	if err := b.record.Claude.send(b.record.Socket, name, text); err != nil {
+	if err := b.record.send(name, text); err != nil {
 		b.logger.Printf("pair notice to %s: %v", peer, err)
 	}
 }
@@ -135,11 +139,12 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 		case <-b.stop:
 			return "The peer ended the pairing."
 		case <-tick.C:
-			c, err := b.record.Claude.connect()
-			if err != nil {
+			if err := b.record.alive(); err != nil {
+				if b.record.Codex != nil {
+					return "The peer's Codex session exited."
+				}
 				return "The peer's Claude exited."
 			}
-			c.Close()
 			if check != nil {
 				if reason := check(); reason != "" {
 					return reason
@@ -195,9 +200,9 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 					seen = map[string]bool{}
 				}
 				seen["in:"+f.ID] = true
-				if err := b.record.Claude.send(b.record.Socket, b.record.Identity.label(), f.Text); err != nil {
+				if err := b.record.send(b.record.Identity.label(), f.Text); err != nil {
 					b.logger.Printf("pair delivery: %v", err)
-					return "The peer's Claude became unavailable."
+					return "The peer's agent became unavailable."
 				}
 			default:
 				return "The peer sent an unsupported pair frame."
@@ -212,15 +217,16 @@ type pairConfig struct {
 	Addr     string          `json:"addr"`
 	Key      key.NodePrivate `json:"key"`
 	Claude   claudeEndpoint  `json:"claude"`
+	Codex    *codexEndpoint  `json:"codex,omitempty"`
 }
 
 func cmdPair(args []string) {
 	addr, inviteID := splitInviteLink(parseLink(args))
-	a, err := callerClaude()
+	a, codex, err := callerAgent()
 	if err != nil {
 		fatalf("%v", err)
 	}
-	identity, err := sessionIdentity(a, displayName())
+	identity, err := agentSessionIdentity(a, codex, displayName())
 	if err != nil {
 		fatalf("pair identity: %v", err)
 	}
@@ -247,7 +253,7 @@ func cmdPair(args []string) {
 	}
 	childFile.Close()
 	go c.Wait()
-	cfg := pairConfig{Invite: inviteID, Identity: identity, Addr: addr, Key: key.NewNode(), Claude: a}
+	cfg := pairConfig{Invite: inviteID, Identity: identity, Addr: addr, Key: key.NewNode(), Claude: a, Codex: codex}
 	if err := json.NewEncoder(control).Encode(cfg); err != nil {
 		fatalf("starting pair: %v", err)
 	}
@@ -272,7 +278,7 @@ func cmdPair(args []string) {
 			fatalf("pair startup: %v", err)
 		}
 	}
-	fmt.Printf("Pairing continues in the background. Send the host this code: %s\nClaude will be told when the host lets it in, or if connecting fails. Run quack unpair to cancel.\n", codeFor(cfg.Key.Public().String()))
+	fmt.Printf("Pairing continues in the background. Send the host this code: %s\nYour agent will be told when the host lets it in, or if connecting fails. Run quack unpair to cancel.\n", codeFor(cfg.Key.Public().String()))
 }
 
 func cmdPairWorker(args []string) {
@@ -309,7 +315,7 @@ func cmdPairWorker(args []string) {
 		}
 		printed <- v
 	}()
-	b, err := newPairInbox(cfg.Claude, "connecting", logger)
+	b, err := newAgentInbox(cfg.Claude, cfg.Codex, "connecting", logger)
 	if err != nil {
 		if reportErr := json.NewEncoder(control).Encode(pairFrame{Type: "error", Text: err.Error()}); reportErr != nil {
 			logger.Printf("pair startup: %v; reporting: %v", err, reportErr)
@@ -404,11 +410,9 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 		case <-ctx.Done():
 			return fail(fmt.Errorf("pairing cancelled"))
 		case <-tick.C:
-			c, err := cfg.Claude.connect()
-			if err != nil {
+			if err := b.record.alive(); err != nil {
 				return fail(err)
 			}
-			c.Close()
 		case err := <-p.errors:
 			return fail(err)
 		case f := <-p.in:
@@ -468,17 +472,17 @@ func pairGate(s server, pub, who, inviteID string) {
 	case <-p.errors:
 		return
 	}
-	a, err := hostClaude(s)
+	a, codex, err := hostAgent(s)
 	if err != nil {
 		goodbye(err.Error())
 		return
 	}
-	identity, err := sessionIdentity(a, s.get("host"))
+	identity, err := agentSessionIdentity(a, codex, s.get("host"))
 	if err != nil {
 		goodbye(err.Error())
 		return
 	}
-	b, err := newPairInbox(a, who, logger)
+	b, err := newAgentInbox(a, codex, who, logger)
 	if err != nil {
 		goodbye(err.Error())
 		return
@@ -512,9 +516,9 @@ func pairGate(s server, pub, who, inviteID string) {
 	}
 	admitted := s.get("ok_"+id) != ""
 	if !admitted {
-		logger.Printf("%s's Claude (%s) waiting", who, code)
+		logger.Printf("%s's agent (%s) waiting", who, code)
 		refreshStatus(s)
-		if err := notify(fmt.Sprintf("%s's Claude wants to pair (code %s). Ctrl-Q to answer.", who, code)); err != nil {
+		if err := notify(fmt.Sprintf("%s's agent wants to pair (code %s). Ctrl-Q to answer.", who, code)); err != nil {
 			logger.Printf("notify: %v", err)
 		}
 		if err := p.send(pairFrame{Type: "waiting"}); err != nil {
@@ -542,11 +546,8 @@ func pairGate(s server, pub, who, inviteID string) {
 				reason = pairEndReason(s, id, "The host declined.")
 			}
 			if reason == "" {
-				c, err := a.connect()
-				if err != nil {
-					reason = "The host's Claude exited."
-				} else {
-					c.Close()
+				if err := b.record.alive(); err != nil {
+					reason = "The host's agent exited."
 				}
 			}
 		}
@@ -565,7 +566,7 @@ func pairGate(s server, pub, who, inviteID string) {
 		logger.Printf("pair ready: %v", err)
 		return
 	}
-	logger.Printf("%s's Claude (%s) paired", who, code)
+	logger.Printf("%s's agent (%s) paired", who, code)
 	pairNotice(b, who, pairPrompt(b))
 	reason = bridgePair(ctx, b, p, who, func() string {
 		if !s.alive() {
@@ -582,7 +583,7 @@ func pairGate(s server, pub, who, inviteID string) {
 	if ctx.Err() != nil {
 		reason = pairEndReason(s, id, "The host ended the session.")
 	}
-	logger.Printf("%s's Claude (%s): %s", who, code, reason)
+	logger.Printf("%s's agent (%s): %s", who, code, reason)
 	goodbye(reason)
 	pairNotice(b, who, reason)
 }
@@ -598,28 +599,21 @@ func cmdUnpair(args []string) {
 	if len(args) > 1 {
 		fatalf("usage: quack unpair [name]")
 	}
-	matches, err := filepath.Glob(filepath.Join(claudeSessions(), "*.json"))
+	caller, codex, callerErr := callerAgent()
+	if callerErr != nil && os.Getenv("CODEX_THREAD_ID") != "" {
+		fatalf("%v", callerErr)
+	}
+	home := codexHome()
+	if codex != nil {
+		home = codex.Home
+	}
+	candidates, err := readPairRecords(home)
 	if err != nil {
 		fatalf("%v", err)
 	}
 	var records []pairRecord
-	caller, callerErr := callerClaude()
-	for _, path := range matches {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			fatalf("%v", err)
-		}
-		var r pairRecord
-		if err := json.Unmarshal(b, &r); err != nil {
-			continue
-		}
-		if r.Entrypoint != "quack-pair" {
-			continue
-		}
-		if callerErr == nil && r.Claude.PID != caller.PID {
+	for _, r := range candidates {
+		if callerErr == nil && !r.belongsTo(caller, codex) {
 			continue
 		}
 		if len(args) == 1 {
@@ -650,11 +644,11 @@ func cmdUnpair(args []string) {
 		fatalf("no matching pairing")
 	}
 	if len(args) == 0 && callerErr != nil && len(records) > 1 {
-		fatalf("several pairings; specify a peer name or run unpair inside Claude")
+		fatalf("several pairings; specify a peer name or run unpair inside your agent")
 	}
 	for _, r := range records {
 		a := claudeEndpoint{r.PID, r.Socket, r.Start}
-		keyPath := claudeKeyPath(r.PID, r.Socket)
+		keyPath := r.keyPath()
 		if err := ownedPath(keyPath, 0); err != nil {
 			fatalf("%v", err)
 		}
@@ -682,6 +676,17 @@ func cmdUnpair(args []string) {
 		if err := enc.Encode(map[string]string{"type": "control", "action": "quack_unpair"}); err != nil {
 			c.Close()
 			fatalf("%v", err)
+		}
+		var reply struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(c).Decode(&reply); err != nil {
+			c.Close()
+			fatalf("unpair: %v", err)
+		}
+		if reply.Status != "stopping" {
+			c.Close()
+			fatalf("pair inbox did not accept unpair")
 		}
 		c.Close()
 		fmt.Printf("Ending pairing with %s (%s).\n", r.Peer, r.Name)

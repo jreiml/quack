@@ -234,6 +234,15 @@ func fakeClaude() {
 			if err := enc.Encode(f); err != nil {
 				panic(err)
 			}
+			if err := peer.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+				panic(err)
+			}
+			if err := peer.(*net.UnixConn).CloseWrite(); err != nil {
+				panic(err)
+			}
+			if _, err := io.Copy(io.Discard, peer); err != nil {
+				panic(err)
+			}
 			peer.Close()
 		case "messages":
 			mu.Lock()
@@ -349,6 +358,7 @@ func fakeSetup(t *testing.T) string {
 	t.Cleanup(func() { os.RemoveAll(root) })
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(os.Getenv("HOME"), ".claude"))
+	t.Setenv("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex"))
 	t.Setenv("QUACK_PAIR_ROOT", root)
 	t.Setenv("QUACK_PAIR_BIN", bin)
 	return root

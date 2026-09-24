@@ -57,13 +57,13 @@ func showMenu(s server, tty, view string, args []string) {
 			}
 			add("Let "+w.name+" in ("+w.code+")", key, act("allow", w.hex))
 			if w.pair {
-				add("-  Their messages reach Claude without asking", "", "")
-				add("-  Claude may ask in a different permission mode", "", "")
+				add("-  Their messages reach your agent without asking", "", "")
+				add("-  Agent tool permissions still apply; Claude may hold messages", "", "")
 			}
 			add("Decline "+w.name, "", act("decline", w.hex))
 		}
 		add("Invite to terminal…", "t", act("menu", "create", "join", "never"))
-		add("Invite a Claude…", "c", act("menu", "create", "pair", "never"))
+		add("Invite an agent…", "c", act("menu", "create", "pair", "never"))
 		add("Manage access…", "m", act("menu", "access"))
 		if s.shared() {
 			add("Stop all access", "s", confirm("Revoke all invites and disconnect everyone?", "unshare"))
@@ -78,7 +78,7 @@ func showMenu(s server, tty, view string, args []string) {
 		kind, expiry := args[0], args[1]
 		title := "Invite to terminal"
 		if kind == "pair" {
-			title = "Invite a Claude"
+			title = "Invite an agent"
 		}
 		add("-"+title, "", "")
 		add("Copy · ask before admitting", "a", act("invite-create", kind, "ask", expiry))
@@ -124,7 +124,7 @@ func showMenu(s server, tty, view string, args []string) {
 			add("-No invites yet", "", "")
 		}
 		add("", "", "")
-		add("Stop all agent messaging", "c", confirm("Revoke Claude invites and disconnect all pairs?", "stop-access", "pair"))
+		add("Stop all agent messaging", "c", confirm("Revoke agent invites and disconnect all pairs?", "stop-access", "pair"))
 		add("Stop all terminal access", "t", confirm("Revoke terminal invites and disconnect all guests?", "stop-access", "join"))
 		back("main")
 	case "invite":

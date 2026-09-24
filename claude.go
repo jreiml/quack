@@ -276,37 +276,6 @@ func callerClaude() (claudeEndpoint, error) {
 	return claudeEndpoint{}, fmt.Errorf("run this inside Claude Code: ! quack pair <link> (Claude needs its local messaging socket)")
 }
 
-func hostClaude(s server) (claudeEndpoint, error) {
-	panes, err := s.run("list-panes", "-t", "=main", "-F", "#{pane_pid}")
-	if err != nil {
-		return claudeEndpoint{}, err
-	}
-	parents, err := processParents()
-	if err != nil {
-		return claudeEndpoint{}, err
-	}
-	var found []claudeEndpoint
-	for pid := range parents {
-		for _, pane := range strings.Fields(panes) {
-			root, err := strconv.Atoi(pane)
-			if err != nil {
-				return claudeEndpoint{}, err
-			}
-			if !descendsFrom(pid, root, parents) {
-				continue
-			}
-			if a, err := endpointFor(pid); err == nil {
-				found = append(found, a)
-			}
-			break
-		}
-	}
-	if len(found) != 1 {
-		return claudeEndpoint{}, fmt.Errorf("expected one Claude messaging socket in %s, found %d", s.name, len(found))
-	}
-	return found[0], nil
-}
-
 type localFrame struct {
 	Type     string `json:"type"`
 	Token    string `json:"token,omitempty"`
@@ -396,6 +365,7 @@ type pairRecord struct {
 	Features   []string       `json:"peerFeatures"`
 	Socket     string         `json:"messagingSocketPath"`
 	Claude     claudeEndpoint `json:"quackClaude"`
+	Codex      *codexEndpoint `json:"quackCodex,omitempty"`
 	Peer       string         `json:"quackPeer"`
 	Identity   agentIdentity  `json:"quackPeerIdentity"`
 }
@@ -429,6 +399,10 @@ func exclusiveJSON(path string, v any) error {
 }
 
 func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox, error) {
+	return newAgentInbox(a, nil, peer, logger)
+}
+
+func newAgentInbox(a claudeEndpoint, codex *codexEndpoint, peer string, logger *log.Logger) (*pairInbox, error) {
 	domain, err := processDomain()
 	if err != nil {
 		return nil, err
@@ -446,6 +420,12 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 		return nil, err
 	}
 	dir := filepath.Dir(a.Socket)
+	if codex != nil {
+		dir = filepath.Join(os.TempDir(), fmt.Sprintf("quack-codex-%d", os.Getuid()))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
 	if err := ownedPath(dir, os.ModeDir); err != nil {
 		return nil, err
 	}
@@ -455,23 +435,27 @@ func newPairInbox(a claudeEndpoint, peer string, logger *log.Logger) (*pairInbox
 		return nil, err
 	}
 	b := &pairInbox{listener: ln, key: hex.EncodeToString(token), messages: make(chan localFrame, 8), stop: make(chan struct{}), done: make(chan struct{}), logger: logger}
-	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, domain, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, peer, agentIdentity{}}
+	b.record = pairRecord{os.Getpid(), randomID(), "quack-" + strconv.Itoa(os.Getpid()), "user", start, domain, time.Now().UnixMilli(), cwd, "interactive", "quack-pair", "idle", 1, []string{}, path, a, codex, peer, agentIdentity{}}
 	b.files = append(b.files, path)
 	if err := os.Chmod(path, 0o600); err != nil {
 		b.close()
 		return nil, err
 	}
-	if err := os.MkdirAll(claudeSessions(), 0o700); err != nil {
+	if err := os.MkdirAll(b.record.registry(), 0o700); err != nil {
 		b.close()
 		return nil, err
 	}
-	keyPath := claudeKeyPath(os.Getpid(), path)
+	if err := ownedPath(b.record.registry(), os.ModeDir); err != nil {
+		b.close()
+		return nil, err
+	}
+	keyPath := b.record.keyPath()
 	if err := exclusiveJSON(keyPath, claudeKey{b.key, start, domain}); err != nil {
 		b.close()
 		return nil, err
 	}
 	b.files = append(b.files, keyPath)
-	recordPath := filepath.Join(claudeSessions(), strconv.Itoa(os.Getpid())+".json")
+	recordPath := filepath.Join(b.record.registry(), strconv.Itoa(os.Getpid())+".json")
 	if err := exclusiveJSON(recordPath, b.record); err != nil {
 		b.close()
 		return nil, err
@@ -493,7 +477,7 @@ func (b *pairInbox) setPeer(peer agentIdentity) error {
 	record.Peer = peer.Owner
 	record.Identity = peer
 	record.Name = name
-	path := filepath.Join(claudeSessions(), strconv.Itoa(record.PID)+".json")
+	path := filepath.Join(record.registry(), strconv.Itoa(record.PID)+".json")
 	tmp := path + ".tmp"
 	if err := exclusiveJSON(tmp, record); err != nil {
 		return err
@@ -573,18 +557,35 @@ func (b *pairInbox) receive(c net.Conn) {
 		}
 		if f.Type == "control" && f.Action == "quack_unpair" {
 			b.once.Do(func() { close(b.stop) })
+			if err := json.NewEncoder(c).Encode(map[string]string{"status": "stopping"}); err != nil {
+				b.logger.Printf("unpair receipt: %v", err)
+			}
 			return
 		}
 		if f.Type != "user" {
 			continue
 		}
-		if !hasPID || pid != b.record.Claude.PID {
+		if b.record.Codex != nil {
+			if err := b.record.alive(); err != nil {
+				return
+			}
+			parents, err := processParents()
+			if err != nil {
+				b.logger.Printf("send credentials: %v", err)
+				return
+			}
+			if !hasPID || !descendsFrom(pid, b.record.Codex.PID, parents) || f.Session != b.record.Codex.Thread {
+				return
+			}
+		} else if !hasPID || pid != b.record.Claude.PID {
 			return
 		}
-		if f.Session != "" && f.Session != b.record.SessionID {
+		if b.record.Codex == nil && f.Session != "" && f.Session != b.record.SessionID {
 			return
 		}
-		f.Message.Content = messageBody(f.Message.Content)
+		if b.record.Codex == nil {
+			f.Message.Content = messageBody(f.Message.Content)
+		}
 		if f.ID == "" {
 			f.ID = randomID()
 		}
@@ -593,7 +594,15 @@ func (b *pairInbox) receive(c net.Conn) {
 		}
 		select {
 		case b.messages <- f:
+			if b.record.Codex != nil {
+				if err := json.NewEncoder(c).Encode(map[string]string{"status": "queued"}); err != nil {
+					b.logger.Printf("send receipt: %v", err)
+				}
+				return
+			}
 		case <-b.done:
+		case <-time.After(2 * time.Second):
+			return
 		}
 	}
 	if err := scanner.Err(); err != nil {
