@@ -12,11 +12,23 @@ Ctrl-Q  m           manage invites and their connections
 ```
 
 `quack new` opens `$SHELL`, falling back to `/bin/sh` if it is unset.
-Arguments after `quack claude` or `quack codex` go directly to the agent—no
-`--` separator needed. For example, `quack claude --resume` or
-`quack codex resume`. Claude uses `--dangerously-skip-permissions`; Codex uses `--no-daemon` so quack can discover its thread, with
-Codex's normal tool permissions. For a custom session name, immediate sharing,
-or a different command, use `quack new -n name -s -- cmd`.
+Both agent shortcuts accept `-n name` or `--name name` for the quack/tmux
+session, also used by `quack attach name` and `quack share name`. Claude receives
+the same conversation name; Codex's conversation name remains independent
+(use `/rename` inside Codex).
+
+```
+quack claude -n auth-fix --model opus
+quack codex --name auth-fix --model gpt-6-astra
+quack claude -n terminal-name -- --name conversation-name
+```
+
+Other arguments go directly to the agent, preserving their values and order.
+`--` is optional: it ends quack's option parsing, so everything after it belongs
+to the agent, including `-n` or `--name`. `--name=auth-fix` also works.
+Claude uses `--dangerously-skip-permissions`; Codex uses `--no-daemon` so quack
+can discover its thread, with Codex's normal tool permissions. For immediate
+sharing or a different command, use `quack new -n name -s -- cmd`.
 
 ## Invites and access
 
@@ -242,8 +254,8 @@ It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`).
 
 | | |
 |---|---|
-| `quack claude [args...]` | start Claude with `--dangerously-skip-permissions`; forward agent arguments |
-| `quack codex [args...]` | start Codex with `--no-daemon`; forward agent arguments |
+| `quack claude [-n name] [args...]` | start Claude with `--dangerously-skip-permissions`; forward agent arguments |
+| `quack codex [-n name] [args...]` | start Codex with `--no-daemon`; forward agent arguments |
 | `quack new [-n name] [-s] [-- cmd]` | start a session (default `$SHELL`, or `/bin/sh`) and attach; `-s` shares it right away |
 | `quack ls` | sessions with dir, age, attached, shared, guests, waiting |
 | `quack attach [name]` / `quack detach` | reattach / detach; the session keeps running |

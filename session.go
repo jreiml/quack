@@ -45,6 +45,48 @@ func isTTY() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
+func cmdAgent(agent string, args []string) {
+	name := ""
+	var forwarded []string
+	for len(args) > 0 {
+		if args[0] == "--" {
+			forwarded = append(forwarded, args[1:]...)
+			break
+		}
+		flag, value, inline := strings.Cut(args[0], "=")
+		if flag != "-n" && flag != "--name" {
+			forwarded = append(forwarded, args[0])
+			args = args[1:]
+			continue
+		}
+		args = args[1:]
+		if !inline {
+			if len(args) == 0 {
+				fatalf("%s needs a session name", flag)
+			}
+			value, args = args[0], args[1:]
+		}
+		if value == "" || strings.HasPrefix(value, "-") {
+			fatalf("%s needs a session name", flag)
+		}
+		name = value
+	}
+	var launch []string
+	if name != "" {
+		launch = append(launch, "-n", name)
+	}
+	launch = append(launch, "--", agent)
+	if agent == "claude" {
+		launch = append(launch, "--dangerously-skip-permissions")
+		if name != "" {
+			launch = append(launch, "--name", name)
+		}
+	} else {
+		launch = append(launch, "--no-daemon")
+	}
+	cmdNew(append(launch, forwarded...))
+}
+
 func cmdNew(args []string) {
 	name := ""
 	share := false

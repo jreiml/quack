@@ -7,8 +7,8 @@ import (
 
 const usage = `quack: shareable terminal sessions over tailcat
 
-  quack claude [args...]              start Claude with --dangerously-skip-permissions
-  quack codex [args...]               start Codex without the shared daemon, ready for pairing
+  quack claude [-n name] [args...]    start Claude with --dangerously-skip-permissions
+  quack codex [-n name] [args...]     start Codex without the shared daemon, ready for pairing
   quack new [-n name] [-s] [-- cmd]   start a session (default: $SHELL, or /bin/sh) and attach; -s shares it at once
   quack ls                            list sessions
   quack attach [name]                 reattach (default: most recent)
@@ -28,6 +28,9 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack send <name> --message <text>  send to a paired agent from Codex
   quack unpair [name]                 end an agent pairing
   quack join <link>                   join someone's session (Ctrl-Q q leaves)
+
+For claude/codex, -n or --name names the quack session. Other arguments pass through;
+-- ends quack option parsing. Claude also receives the chosen name.
 
 Inside a session, Ctrl-Q opens the quack menu (invite to terminal, invite an agent, manage access, detach).
 `
@@ -53,10 +56,8 @@ func main() {
 	switch cmd {
 	case "new":
 		cmdNew(args)
-	case "claude":
-		cmdNew(append([]string{"--", "claude", "--dangerously-skip-permissions"}, args...))
-	case "codex":
-		cmdNew(append([]string{"--", "codex", "--no-daemon"}, args...))
+	case "claude", "codex":
+		cmdAgent(cmd, args)
 	case "ls", "list":
 		cmdLs(args)
 	case "attach", "a":
