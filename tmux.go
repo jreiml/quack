@@ -188,7 +188,8 @@ func writeConfig() {
 		"unbind -a -T prefix",
 		"unbind -a -T root",
 		"set -g mouse off",
-		"set -g window-size latest",
+		"set -g window-size manual",
+		"set -g fill-character ' '",
 		"set -s extended-keys on",
 		"set -g set-titles on",
 		"set -g set-titles-string '#T'",
@@ -202,6 +203,8 @@ func writeConfig() {
 		"set -g window-status-format ''",
 		"set -g window-status-current-format ''",
 		fmt.Sprintf(`bind -n C-q run-shell -b "%s _menu '#{socket_path}' '#{client_tty}'"`, quackBin()),
+		fmt.Sprintf(`set-hook -g client-attached 'run-shell -b "%s _fit #{socket_path}"'`, quackBin()),
+		fmt.Sprintf(`set-hook -g client-resized 'run-shell -b "%s _fit #{socket_path}"'`, quackBin()),
 		fmt.Sprintf(`set-hook -g session-closed 'run-shell "%s has-session -t =main 2>/dev/null || %s kill-server"'`, tmux, tmux),
 	}
 	if major > 3 || minor >= 5 {

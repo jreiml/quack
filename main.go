@@ -67,6 +67,8 @@ func main() {
 		cmdMenu(args)
 	case "_act":
 		cmdAct(args)
+	case "_fit":
+		cmdFit(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

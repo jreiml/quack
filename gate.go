@@ -106,10 +106,12 @@ func refreshStatus(s server) {
 	}
 	if len(parts) == 0 {
 		s.must("set-option", "-g", "status", "off")
+		fitHost(s)
 		return
 	}
 	s.must("set-option", "-g", "status-left", " "+strings.ReplaceAll(strings.Join(parts, "    "), "#", "##")+" ")
 	s.must("set-option", "-g", "status", "on")
+	fitHost(s)
 }
 
 func notify(msg string) error {

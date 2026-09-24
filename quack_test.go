@@ -54,7 +54,7 @@ func TestNormalizeCode(t *testing.T) {
 
 func TestCleanName(t *testing.T) {
 	for in, want := range map[string]string{
-		"join Ada Lovelace":              "Ada Lovelace",
+		"join Ada Lovelace":               "Ada Lovelace",
 		"join":                            "someone",
 		"":                                "someone",
 		"join Ré'my O.":                   "Ré'my O.",

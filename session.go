@@ -290,3 +290,38 @@ func pick(list []info) server {
 	}
 	return list[n-1].s
 }
+
+func fitHost(s server) {
+	guests := guestTTYs(s)
+	best, w, h := int64(-1), 0, 0
+	for _, line := range strings.Split(s.must("list-clients", "-t", "=main", "-F", "#{client_activity} #{client_width} #{client_height} #{client_tty}"), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || guests[f[3]] {
+			continue
+		}
+		act, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil || act <= best {
+			continue
+		}
+		cw, errW := strconv.Atoi(f[1])
+		ch, errH := strconv.Atoi(f[2])
+		if errW != nil || errH != nil {
+			continue
+		}
+		best, w, h = act, cw, ch
+	}
+	if best < 0 {
+		return
+	}
+	if s.must("show-options", "-gv", "status") == "on" {
+		h--
+	}
+	s.must("resize-window", "-t", "=main:", "-x", strconv.Itoa(w), "-y", strconv.Itoa(h))
+}
+
+func cmdFit(args []string) {
+	if len(args) != 1 {
+		fatalf("usage: quack _fit <socket>")
+	}
+	fitHost(serverFromSocket(args[0]))
+}
