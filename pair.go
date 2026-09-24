@@ -104,7 +104,7 @@ func (r *pairRate) take(now time.Time) bool {
 
 func pairPrompt(b *pairInbox) string {
 	peer := b.record.Identity
-	return fmt.Sprintf("You’re collaborating with %s, a Claude session belonging to %s. Your humans are working together and paired these sessions so you can coordinate. Use SendMessage to %q. Start by sharing a brief summary of your current task and a useful question or finding, then exchange relevant updates as work progresses. Avoid acknowledgment-only replies. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, b.record.Name, b.record.Name)
+	return fmt.Sprintf("You can collaborate with %s, a Claude session belonging to %s. Your humans are working together. Continue your current task. Use SendMessage to %q when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, b.record.Name, b.record.Name)
 }
 
 func pairNotice(b *pairInbox, peer, text string) {

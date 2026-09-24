@@ -95,8 +95,9 @@ Terminal invites and their allowances are independent of Claude invites.
 
 The command waits up to three seconds for a connection and approval. If ready,
 it prints a prompt introducing the other Claude as a collaborator, explaining
-how to send messages, and asking for a brief task summary followed by useful
-questions and updates. Otherwise it prints the code and returns; a background process tells
+how to send messages, and encouraging collaboration when relevant to the current
+task. Pairing itself requires no introduction or investigation; idle agents wait
+for their human’s direction. Otherwise it prints the code and returns; a background process tells
 Claude when approval happens or connecting fails. No skill or plugin is needed.
 The host's Claude also gets a pairing prompt. Both use native `SendMessage` to
 the inbox name in that prompt; only those messages cross the link.
