@@ -251,6 +251,15 @@ func fakeClaude() {
 
 func fakeCall(t *testing.T, f fakeClaudeInfo, c fakeClaudeCommand) fakeClaudeResult {
 	t.Helper()
+	result := fakeCallResult(t, f, c)
+	if result.Error != "" {
+		t.Fatalf("fake Claude %s: %s\n%s", c.Action, result.Error, result.Output)
+	}
+	return result
+}
+
+func fakeCallResult(t *testing.T, f fakeClaudeInfo, c fakeClaudeCommand) fakeClaudeResult {
+	t.Helper()
 	conn, err := net.DialTimeout("unix", f.Control, time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -265,9 +274,6 @@ func fakeCall(t *testing.T, f fakeClaudeInfo, c fakeClaudeCommand) fakeClaudeRes
 	var result fakeClaudeResult
 	if err := json.NewDecoder(conn).Decode(&result); err != nil {
 		t.Fatal(err)
-	}
-	if result.Error != "" {
-		t.Fatalf("fake Claude %s: %s\n%s", c.Action, result.Error, result.Output)
 	}
 	return result
 }
@@ -483,8 +489,8 @@ func TestNetPair(t *testing.T) {
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 	g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 	eventually(t, "host attached", func() bool { return hostAttached(s) })
-	quack(t, "share", s.name)
-	addr := s.get("addr")
+	quack(t, "share", "--pair", s.name)
+	addr := inviteLinkForTest(t, s, "pair")
 	started := time.Now()
 	result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	if time.Since(started) > 5*time.Second {
@@ -527,17 +533,23 @@ func TestNetPair(t *testing.T) {
 	for _, path := range []string{strings.TrimPrefix(hostInbox, "uds:"), strings.TrimPrefix(guestInbox, "uds:")} {
 		eventually(t, "socket removed", func() bool { _, err := os.Lstat(path); return os.IsNotExist(err) })
 	}
-	quack(t, "share", "--auto-approve", "--limit", "1", s.name)
+	quack(t, "share", "--pair", "--auto-approve", "--limit", "1", s.name)
+	addr = inviteLinkForTest(t, s, "pair")
 	result = fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "auto pair", func() bool { return len(pairs(s)) == 1 && pairs(s)[0].state == "active" })
-	if s.get("auto") != "" {
+	_, consumedID := splitInviteLink(addr)
+	consumed, _ := loadInvite(s, consumedID)
+	if consumed.State != "consumed" {
 		t.Fatal("pair did not consume one-time spot")
 	}
+	quack(t, "share", "--pair", s.name)
+	addr = inviteLinkForTest(t, s, "pair")
 	fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "second pair waits", func() bool { return len(waiting(s)) == 1 })
 
 	oldestInbox := fakeInbox(t, guest, result.Output)
-	quack(t, "share", "--auto-approve", "--limit", "2", s.name)
+	n := 2
+	changeInvite(s, waiting(s)[0].invite, &n, nil)
 	other := startFake(t, root, "other")
 	otherResult := fakeCall(t, other, fakeClaudeCommand{Action: "pair", Address: addr})
 	otherInbox := fakeInbox(t, other, otherResult.Output)
@@ -612,8 +624,8 @@ func TestNetPairEndings(t *testing.T) {
 			defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 			g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 			eventually(t, "host attached", func() bool { return hostAttached(s) })
-			quack(t, "share", "--auto-approve", "--expires", "8s", s.name)
-			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: s.get("addr")})
+			quack(t, "share", "--pair", "--auto-approve", "--expires", "8s", s.name)
+			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, s, "pair")})
 			guestInbox := fakeInbox(t, guest, result.Output)
 			hostInbox := fakeInbox(t, host, "")
 			survivor := guest
@@ -624,7 +636,7 @@ func TestNetPairEndings(t *testing.T) {
 				quack(t, "detach", s.name)
 				want = "The host left, so sharing stopped."
 			case "expiry":
-				want = "pairing time expired"
+				want = "invite expired"
 			case "host-exit":
 				fakeCall(t, host, fakeClaudeCommand{Action: "exit"})
 				want = "ended"
@@ -647,8 +659,9 @@ func TestPairDeclineGate(t *testing.T) {
 	s := server{quack(t, "new", "-n", "t-pair-decline", "--", "env", "QUACK_PAIR_HELPER=1", "QUACK_PAIR_LABEL=host", os.Args[0])}
 	defer s.run("kill-server")
 	fakeInfo(t, root, "host")
+	i := createInvite(s, "pair", -1, 0)
 	c := exec.Command(bin, "_gate", s.name)
-	c.Env = append(os.Environ(), "TAILCAT_PEER_KEY=nodekey:"+strings.Repeat("ab", 32), "SSH_ORIGINAL_COMMAND=pair Ada Lovelace", "TAILCAT_REMOTE_ADDR=[::1]:1234")
+	c.Env = append(os.Environ(), "TAILCAT_PEER_KEY=nodekey:"+strings.Repeat("ab", 32), "SSH_ORIGINAL_COMMAND=pair-invite "+i.ID+" Ada Lovelace", "TAILCAT_REMOTE_ADDR=[::1]:1234")
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
 	in, err := c.StdinPipe()

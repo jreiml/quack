@@ -135,11 +135,12 @@ func parseLink(args []string) string {
 }
 
 func cmdJoin(args []string) {
-	addr := parseLink(args)
+	link := parseLink(args)
+	addr, inviteID := splitInviteLink(link)
 	if !isTTY() {
 		fatalf("join needs a terminal")
 	}
-	k := clientKey(addr)
+	k := clientKey(link)
 	fmt.Fprintf(os.Stderr, "connecting… your code is %s\n", codeFor(k.Public().String()))
 
 	cl := &tailcat.Client{Server: tailcat.Addr(addr), Key: k, Logf: logger.Discard}
@@ -210,7 +211,7 @@ func cmdJoin(args []string) {
 	go forwardStdin(stdin)
 	go keepalive(client)
 
-	if err := sess.Start("join " + displayName()); err != nil {
+	if err := sess.Start("join-invite " + inviteID + " " + displayName()); err != nil {
 		term.Restore(fd, old)
 		fatalf("%v", err)
 	}

@@ -208,6 +208,7 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 }
 
 type pairConfig struct {
+	Invite   string          `json:"invite"`
 	Identity agentIdentity   `json:"identity"`
 	Addr     string          `json:"addr"`
 	Key      key.NodePrivate `json:"key"`
@@ -216,7 +217,7 @@ type pairConfig struct {
 }
 
 func cmdPair(args []string) {
-	addr := parseLink(args)
+	addr, inviteID := splitInviteLink(parseLink(args))
 	a, err := callerClaude()
 	if err != nil {
 		fatalf("%v", err)
@@ -248,7 +249,7 @@ func cmdPair(args []string) {
 	}
 	childFile.Close()
 	go c.Wait()
-	cfg := pairConfig{identity, addr, key.NewNode(), a, identity.Owner}
+	cfg := pairConfig{inviteID, identity, addr, key.NewNode(), a, identity.Owner}
 	if err := json.NewEncoder(control).Encode(cfg); err != nil {
 		fatalf("starting pair: %v", err)
 	}
@@ -389,7 +390,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 		return fail(err)
 	}
 	sess.Stderr = os.Stderr
-	if err := sess.Start("pair " + cfg.Name); err != nil {
+	if err := sess.Start("pair-invite " + cfg.Invite + " " + cfg.Name); err != nil {
 		return fail(err)
 	}
 	go keepalive(client)
@@ -441,7 +442,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 	}
 }
 
-func pairGate(s server, pub, who string) {
+func pairGate(s server, pub, who, inviteID string) {
 	logger, file := openLog(s.name)
 	defer file.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
@@ -501,20 +502,17 @@ func pairGate(s server, pub, who string) {
 		if !s.alive() {
 			return
 		}
-		for _, opt := range []string{pidOpt, active, "wait_" + id, "ok_" + id, "bye_" + id} {
+		for _, opt := range []string{pidOpt, active, "wait_" + id, "ok_" + id, "bye_" + id, "member_" + id} {
 			s.unset(opt)
 		}
 		refreshStatus(s)
 	}()
 	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|waiting")
-	unlock := lockShare(s)
-	admitted := autoTake(s)
-	if admitted {
-		s.set("ok_"+id, peer.label())
-	} else {
-		s.set("wait_"+id, code+"|"+peer.label()+"|pair")
+	if err := requestAdmission(s, inviteID, "pair", id, peer.label(), code); err != nil {
+		goodbye(err.Error())
+		return
 	}
-	unlock()
+	admitted := s.get("ok_"+id) != ""
 	if !admitted {
 		logger.Printf("%s's Claude (%s) waiting", who, code)
 		refreshStatus(s)
@@ -571,7 +569,6 @@ func pairGate(s server, pub, who string) {
 	}
 	logger.Printf("%s's Claude (%s) paired", who, code)
 	pairNotice(b, who, pairPrompt(b))
-	until, expires := awayUntil(s)
 	reason = bridgePair(ctx, b, p, who, func() string {
 		if !s.alive() {
 			return "The host ended the session."
@@ -579,8 +576,8 @@ func pairGate(s server, pub, who string) {
 		if s.get("ok_"+id) == "" || !s.shared() {
 			return pairEndReason(s, id, "The host stopped sharing.")
 		}
-		if expires && time.Now().After(until) {
-			return "The share's pairing time expired."
+		if i, ok := loadInvite(s, inviteID); !ok || i.expired() {
+			return "The invite expired."
 		}
 		return ""
 	})
@@ -704,7 +701,7 @@ func pairs(s server) []entry {
 		if err != nil {
 			continue
 		}
-		out = append(out, entry{s: s, hex: id, name: f[0], code: f[1], pid: pid, state: f[3], pair: true})
+		out = append(out, entry{s: s, hex: id, invite: s.get("member_" + id), name: f[0], code: f[1], pid: pid, state: f[3], pair: true})
 	}
 	return out
 }

@@ -99,6 +99,7 @@ func cmdNew(args []string) {
 	s.set("dir", dir)
 	if share {
 		startShare(s)
+		createInvite(s, "join", -1, 0)
 	}
 	if !isTTY() {
 		fmt.Println(name)
@@ -142,7 +143,7 @@ func hostAttached(s server) bool {
 }
 
 func terminalClosed(s server) {
-	if !s.alive() || s.get("away") != "" || hostAttached(s) {
+	if !s.alive() || staysAway(s) || hostAttached(s) {
 		return
 	}
 	s.must("kill-server")
@@ -195,7 +196,12 @@ type info struct {
 }
 
 func describe(s server) info {
-	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir"), shared: s.shared(), auto: s.get("auto") != ""}
+	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir"), shared: s.shared()}
+	for _, v := range invites(s) {
+		if v.State == "open" && v.Admission != "ask" && !v.expired() {
+			i.auto = true
+		}
+	}
 	if ts, err := strconv.ParseInt(s.must("display-message", "-p", "-t", "=main:", "#{session_created}"), 10, 64); err == nil {
 		i.created = time.Unix(ts, 0)
 	}

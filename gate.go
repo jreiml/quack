@@ -46,14 +46,15 @@ func cleanName(raw string) string {
 }
 
 type entry struct {
-	s     server
-	hex   string
-	code  string
-	name  string
-	tty   string
-	pid   int
-	pair  bool
-	state string
+	s      server
+	hex    string
+	code   string
+	name   string
+	tty    string
+	pid    int
+	pair   bool
+	invite string
+	state  string
 }
 
 func waiting(s server) []entry {
@@ -63,7 +64,7 @@ func waiting(s server) []entry {
 		if len(f) < 2 {
 			continue
 		}
-		out = append(out, entry{s: s, hex: hex, code: f[0], name: f[1], pair: len(f) == 3 && f[2] == "pair"})
+		out = append(out, entry{s: s, hex: hex, invite: s.get("member_" + hex), code: f[0], name: f[1], pair: len(f) == 3 && f[2] == "pair"})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].name < out[b].name })
 	return out
@@ -80,7 +81,7 @@ func guests(s server) []entry {
 		if err != nil {
 			continue
 		}
-		out = append(out, entry{s: s, hex: f[0], name: f[1], code: f[2], tty: "/dev/" + id, pid: pid})
+		out = append(out, entry{s: s, hex: f[0], invite: s.get("member_" + f[0]), name: f[1], code: f[2], tty: "/dev/" + id, pid: pid})
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].name < out[b].name })
 	return out
@@ -119,7 +120,7 @@ func refreshStatus(s server) {
 	}
 	host := []string{"🦆 Ctrl-Q"}
 	if shared {
-		host = append(host, statusEscape("🌐 Shared, "+modeLabel(s)))
+		host = append(host, statusEscape("🌐 "+plural(openInviteCount(s), "invite")))
 	}
 	if names := namesExcept(""); len(names) > 0 {
 		host = append(host, statusEscape("👀 "+strings.Join(names, ", ")))
@@ -188,45 +189,48 @@ func cmdGate(args []string) {
 	if !strings.HasPrefix(pub, "nodekey:") {
 		logger.Fatalf("gate: missing TAILCAT_PEER_KEY")
 	}
-	command, name, _ := strings.Cut(strings.TrimSpace(os.Getenv("SSH_ORIGINAL_COMMAND")), " ")
-	if command == "pair" {
+	command, rest, _ := strings.Cut(strings.TrimSpace(os.Getenv("SSH_ORIGINAL_COMMAND")), " ")
+	inviteID, name, _ := strings.Cut(rest, " ")
+	if !validInviteID(inviteID) {
+		logger.Fatalf("missing invite ID; ask the host for a new invite")
+	}
+	if command == "pair-invite" {
 		if syscall.Getpgrp() != os.Getpid() {
 			if err := syscall.Setpgid(0, 0); err != nil {
 				logger.Fatalf("pair process group: %v", err)
 			}
 		}
-		pairGate(s, pub, cleanName(name))
+		pairGate(s, pub, cleanName(name), inviteID)
 		return
 	}
-	if command != "join" {
+	if command != "join-invite" {
 		logger.Fatalf("unsupported guest command")
 	}
-	hex := strings.TrimPrefix(pub, "nodekey:")
-	who := cleanName(os.Getenv("SSH_ORIGINAL_COMMAND"))
+	sum := sha256.Sum256([]byte(pub + ":" + inviteID))
+	hex := fmt.Sprintf("%x", sum)
+	who := cleanName(name)
 	code := codeFor(pub)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	s.run("set-option", "-gu", "@quack_bye_"+hex)
 	pidOpt := "@quack_pid_" + connID(os.Getenv("TAILCAT_REMOTE_ADDR"))
 	s.must("set-option", "-g", pidOpt, strconv.Itoa(os.Getpid()))
+	start, err := processStart(os.Getpid())
+	if err != nil {
+		logger.Fatalf("gate identity: %v", err)
+	}
+	s.set("gate_"+hex, strconv.Itoa(os.Getpid())+"|"+start)
 	leave := func(code int) {
+		s.run("set-option", "-gu", "@quack_gate_"+hex)
 		s.run("set-option", "-gu", pidOpt)
 		os.Exit(code)
 	}
 
-	if s.get("ok_"+hex) == "" {
-		if admitted, last := autoAdmit(s, hex, who); admitted {
-			logger.Printf("%s (%s) auto-approved", who, code)
-			if last {
-				if err := notify(who + " got in with the one-time spot. New people need your OK again."); err != nil {
-					logger.Printf("notify: %v", err)
-				}
-			}
-		}
+	if err := requestAdmission(s, inviteID, "join", hex, who, code); err != nil {
+		fmt.Printf("\r\n  %s\r\n", err)
+		leave(1)
 	}
-
 	if s.get("ok_"+hex) == "" {
-		s.set("wait_"+hex, code+"|"+who)
 		refreshStatus(s)
 		logger.Printf("%s (%s) waiting", who, code)
 		if err := notify(fmt.Sprintf("%s wants to join %s (code %s). Ctrl-Q to answer.", who, s.name, code)); err != nil {
@@ -334,6 +338,19 @@ func findWaiting(all []entry, code string) (entry, error) {
 }
 
 func admit(e entry) {
+	unlock := lockShare(e.s)
+	defer unlock()
+	i, ok := loadInvite(e.s, e.invite)
+	if !ok || i.State != "open" || i.expired() || e.s.get("closing") != "" || e.s.get("wait_"+e.hex) == "" {
+		fatalf("invite is no longer accepting this request")
+	}
+	if i.Admission != "ask" && !i.take(e.s) {
+		fatalf("invite has no admissions left")
+	}
+	admitLocked(e)
+}
+
+func admitLocked(e entry) {
 	e.s.set("ok_"+e.hex, e.name)
 	e.s.unset("wait_" + e.hex)
 	e.s.must("wait-for", "-S", channel(e.hex))

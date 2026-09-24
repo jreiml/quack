@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,7 +209,7 @@ func TestTerminalClose(t *testing.T) {
 		s := server{quack(t, "new", "-n", "t-keep", "--", "sleep", "300")}
 		host(s)
 		if away {
-			s.set("away", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+			createInvite(s, "join", 0, time.Hour)
 		} else {
 			quack(t, "detach", s.name)
 			eventually(t, "host to detach", func() bool { return !hostAttached(s) })
@@ -239,40 +238,6 @@ func TestStatusLine(t *testing.T) {
 	refreshStatus(s)
 	if got := s.must("show-options", "-gv", "status-left"); strings.TrimSpace(got) != "🦆 Ctrl-Q" {
 		t.Errorf("status-left = %q with nobody around", got)
-	}
-}
-
-func TestAutoApprove(t *testing.T) {
-	s := server{quack(t, "new", "-n", "t-auto", "--", "sleep", "300")}
-	defer s.run("kill-server")
-	waiter := strings.Repeat("cd", 32)
-	s.set("wait_"+waiter, "tiger-lamp|Ada")
-	setAuto(s, 2, time.Hour)
-	if s.get("ok_"+waiter) != "Ada" || len(waiting(s)) != 0 {
-		t.Fatalf("waiting guest not admitted when auto-approve started")
-	}
-	if got := modeLabel(s); !strings.HasPrefix(got, "next one joins until") {
-		t.Errorf("mode = %q", got)
-	}
-	if !autoTake(s) {
-		t.Fatalf("second person refused with 1 left")
-	}
-	if autoTake(s) || s.get("auto") != "" {
-		t.Errorf("limit not enforced")
-	}
-	if s.get("away") == "" {
-		t.Errorf("share stopped staying on after the limit was used")
-	}
-
-	setAuto(s, 0, -time.Second)
-	if autoTake(s) || s.get("auto") != "" {
-		t.Errorf("expired auto-approve still admits")
-	}
-
-	setAuto(s, 0, time.Hour)
-	closeAuto(s)
-	if s.get("away") != "" {
-		t.Errorf("close left the share running unattended")
 	}
 }
 

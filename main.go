@@ -11,11 +11,13 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack ls                            list sessions
   quack attach [name]                 reattach (default: most recent)
   quack detach [name]                 detach your terminals, keep the session running
-  quack share [name]                  share and copy the join command; guests need your approval
+  quack share [name]                  create and copy a new terminal invite; approval required
+      --pair                          create a Claude invite instead
       --auto-approve                  let people in without asking (runs on after you detach)
-      --limit N                       only the first N people, then ask again
-      --expires 2h                    stop auto-approving after this long (default 24h)
-  quack close [name]                  back to asking first
+      --limit N                       only the first N connections, then reject new ones
+      --expires 2h                    revoke and disconnect after this long; use never for no expiry
+                                      automatic invites default to 24h
+  quack close [name]                  change open invites back to asking first; used invites stay closed
   quack allow <code>                  let a waiting guest in
   quack decline <code>                turn away a waiting guest
   quack unshare [name]                stop sharing; everyone is disconnected and the link stops working
@@ -24,7 +26,7 @@ const usage = `quack: shareable terminal sessions over tailcat
   quack unpair [name]                 end an agent pairing
   quack join <link>                   join someone's session (Ctrl-Q q leaves)
 
-Inside a session, Ctrl-Q opens the quack menu (share, let in, who new people get in, stop sharing, detach).
+Inside a session, Ctrl-Q opens the quack menu (invite to terminal, invite a Claude, manage access, detach).
 `
 
 var onFatal func(msg string)
@@ -74,6 +76,8 @@ func main() {
 		cmdUnpair(args)
 	case "_pair":
 		cmdPairWorker(args)
+	case "_expire":
+		cmdExpire(args)
 	case "_serve":
 		cmdServe(args)
 	case "_gate":

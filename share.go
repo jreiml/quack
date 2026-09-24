@@ -44,6 +44,8 @@ func startShare(s server) string {
 		}
 	}
 	s.unset("addr")
+	s.unset("closing")
+	s.unset("invites_ready")
 	s.unset("error")
 	s.set("host", displayName())
 	s.must("new-session", "-d", "-s", "_serve", "--", quackBin(), "_serve", s.name)
@@ -65,10 +67,6 @@ func startShare(s server) string {
 	return ""
 }
 
-func joinMessage(addr string) string {
-	return "Join my terminal: quack join " + addr + "\nPair your Claude (inside Claude): ! quack pair " + addr
-}
-
 func copyToClipboard(text string) bool {
 	for _, c := range [][]string{{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"}} {
 		if _, err := exec.LookPath(c[0]); err != nil {
@@ -86,7 +84,8 @@ func copyToClipboard(text string) bool {
 }
 
 func cmdShare(args []string) {
-	auto, limit, expires := false, 0, defaultExpiry
+	auto, limit, expires := false, 0, time.Duration(0)
+	kind := "join"
 	limitSet, expiresSet := false, false
 	var rest []string
 	for len(args) > 0 {
@@ -104,6 +103,9 @@ func cmdShare(args []string) {
 			return v
 		}
 		switch flag {
+		case "--pair":
+			kind = "pair"
+			args = args[1:]
 		case "--auto-approve":
 			auto = true
 			args = args[1:]
@@ -114,11 +116,7 @@ func cmdShare(args []string) {
 			}
 			limit, limitSet = n, true
 		case "--expires":
-			d, err := time.ParseDuration(value())
-			if err != nil || d <= 0 {
-				fatalf("--expires needs a duration like 2h or 30m")
-			}
-			expires, expiresSet = d, true
+			expires, expiresSet = inviteExpiry(value()), true
 		default:
 			if strings.HasPrefix(flag, "-") {
 				fatalf("unknown flag %q", flag)
@@ -127,28 +125,48 @@ func cmdShare(args []string) {
 			args = args[1:]
 		}
 	}
-	if (limitSet || expiresSet) && !auto {
-		fatalf("--limit and --expires only work with --auto-approve")
+	if limitSet && !auto {
+		fatalf("--limit only works with --auto-approve")
 	}
 	s := target(rest, true)
-	msg := joinMessage(startShare(s))
-	if auto {
-		setAuto(s, limit, expires)
+	if !auto && !hostAttached(s) {
+		fatalf("ask-first invites need an attached host; run quack attach %s, or use --auto-approve for a handover", s.name)
 	}
+	startShare(s)
+	remaining := -1
+	if auto {
+		remaining = limit
+		if !expiresSet {
+			expires = defaultExpiry
+		}
+	}
+	i := createInvite(s, kind, remaining, expires)
+	msg := i.command(s)
+	refreshStatus(s)
 	fmt.Println(msg)
 	if copyToClipboard(msg) {
 		fmt.Fprintln(os.Stderr, "(copied to clipboard)")
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, describeMode(s))
+	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, i.label())
 }
 
 func cmdClose(args []string) {
 	s := target(args, true)
+	if !hostAttached(s) {
+		fatalf("ask-first access needs an attached host; run quack attach %s, or quack unshare %s to end access", s.name, s.name)
+	}
 	if !s.shared() {
 		fatalf("%s is not shared", s.name)
 	}
-	closeAuto(s)
-	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, describeMode(s))
+	for _, i := range invites(s) {
+		if i.State == "open" {
+			if !i.expired() {
+				n := -1
+				changeInvite(s, i.ID, &n, nil)
+			}
+		}
+	}
+	fmt.Fprintf(os.Stderr, "%s: open invites now ask first\n", s.name)
 }
 
 func cmdUnshare(args []string) {
@@ -161,6 +179,13 @@ func cmdUnshare(args []string) {
 }
 
 func unshare(s server, reason string) {
+	unlock := lockShare(s)
+	if s.get("closing") != "" {
+		unlock()
+		return
+	}
+	s.set("closing", "1")
+	unlock()
 	for hex := range s.opts("ok_") {
 		s.unset("ok_" + hex)
 		s.set("bye_"+hex, reason)
@@ -189,8 +214,11 @@ func unshare(s server, reason string) {
 	for id := range s.opts("guest_") {
 		s.unset("guest_" + id)
 	}
-	s.run("set-option", "-gu", "@quack_auto")
-	s.run("set-option", "-gu", "@quack_away")
+	for _, prefix := range []string{"invite_", "member_", "gate_", "ok_", "wait_", "bye_"} {
+		for id := range s.opts(prefix) {
+			s.unset(prefix + id)
+		}
+	}
 	s.unset("addr")
 	refreshStatus(s)
 }

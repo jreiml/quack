@@ -49,7 +49,7 @@ func TestNetShareJoin(t *testing.T) {
 	t.Setenv("HOME", home)
 	s := server{quack(t, "new", "-n", "t-net", "-s", "--", "bash", "--norc")}
 	defer s.run("kill-server")
-	addr := s.get("addr")
+	addr := inviteLinkForTest(t, s, "join")
 	if !strings.HasPrefix(addr, "tc") {
 		t.Fatalf("addr = %q", addr)
 	}
@@ -103,14 +103,17 @@ func TestNetShareJoin(t *testing.T) {
 
 	newKey()
 	quack(t, "share", "--auto-approve", "--limit", "1", "t-net")
+	addr = inviteLinkForTest(t, s, "join")
 	g.join(addr)
 	eventually(t, "guest to be auto-approved", func() bool { return attached(s) })
-	if s.get("auto") != "" {
+	_, consumedID := splitInviteLink(addr)
+	consumed, _ := loadInvite(s, consumedID)
+	if consumed.State != "consumed" {
 		t.Errorf("auto-approve still on after its one use")
 	}
 	hostScreen := func() string { return g.tmux("capture-pane", "-p", "-t", "host") }
 	eventually(t, "host status bar", func() bool {
-		return strings.Contains(hostScreen(), "🌐 Shared, ask first, stays on until") && strings.Contains(hostScreen(), "👀 ")
+		return strings.Contains(hostScreen(), "🌐 1 invite") && strings.Contains(hostScreen(), "👀 ")
 	})
 	eventually(t, "guest status bar", func() bool { return strings.Contains(g.screen(), "🦆 Ctrl-Q   🏠 ") })
 	if strings.Contains(g.screen(), "Shared") || strings.Contains(g.screen(), "👀") {
@@ -128,6 +131,10 @@ func TestNetShareJoin(t *testing.T) {
 	eventually(t, "guest to leave", func() bool { return len(guests(s)) == 0 })
 
 	newKey()
+	g.tmux("new-session", "-d", "-s", "host-again", "-x", "100", "-y", "30", bin+" attach "+s.name)
+	eventually(t, "host reattached", func() bool { return hostAttached(s) })
+	quack(t, "share", s.name)
+	addr = inviteLinkForTest(t, s, "join")
 	g.join(addr)
 	eventually(t, "second guest to wait once the limit is used", func() bool { return len(waiting(s)) == 1 })
 	quack(t, "unshare", "t-net")
@@ -145,12 +152,16 @@ func TestNetTwoJoinsFromOneMachine(t *testing.T) {
 	s := server{quack(t, "new", "-n", "t-twice", "--", "bash", "--norc")}
 	defer s.run("kill-server")
 	quack(t, "share", "--auto-approve", "--limit", "1", "t-twice")
-	addr := s.get("addr")
+	addr := inviteLinkForTest(t, s, "join")
 	g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "guest2")}
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 
 	g.tmux("new-session", "-d", "-s", "g", "-x", "100", "-y", "30", bin+" join "+addr+"; sleep 120")
 	eventually(t, "first join to be auto-approved", func() bool { return attached(s) })
+	g.tmux("new-session", "-d", "-s", "host", "-x", "100", "-y", "30", bin+" attach "+s.name)
+	eventually(t, "host attached", func() bool { return hostAttached(s) })
+	quack(t, "share", s.name)
+	addr = inviteLinkForTest(t, s, "join")
 	g.tmux("new-session", "-d", "-s", "g2", "-x", "100", "-y", "30", bin+" join "+addr+"; sleep 120")
 	eventually(t, "second join to wait", func() bool { return len(waiting(s)) == 1 })
 	time.Sleep(30 * time.Second)
