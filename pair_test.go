@@ -630,11 +630,11 @@ func TestNetPairEndings(t *testing.T) {
 	for _, ending := range []string{"detach", "expiry", "host-exit", "guest-exit"} {
 		t.Run(ending, func(t *testing.T) {
 			root := fakeSetup(t)
-			s := server{quack(t, "new", "-n", "t-pair-ending", "--", "env", "QUACK_PAIR_HELPER=1", "QUACK_PAIR_LABEL=host", os.Args[0])}
+			s := server{quack(t, "new", "-n", "t-pair-"+ending, "--", "env", "QUACK_PAIR_HELPER=1", "QUACK_PAIR_LABEL=host", os.Args[0])}
 			defer s.run("kill-server")
 			host := fakeInfo(t, root, "host")
 			guest := startFake(t, root, "guest")
-			g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "pair-ending-term")}
+			g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "pair-"+ending+"-term")}
 			defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 			g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 			eventually(t, "host attached", func() bool { return hostAttached(s) })
