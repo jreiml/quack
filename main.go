@@ -7,7 +7,7 @@ import (
 
 const usage = `quack: shareable terminal sessions over tailcat
 
-  quack new [-n name] [-s] [-- cmd]   start a session (default: claude) and attach; -s shares it at once
+  quack new [-n name] [-s] [-- cmd]   start a session (default: claude --dangerously-skip-permissions) and attach; -s shares it at once
   quack ls                            list sessions
   quack attach [name]                 reattach (default: most recent)
   quack detach [name]                 detach your terminals, keep the session running

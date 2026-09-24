@@ -65,7 +65,7 @@ func cmdNew(args []string) {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		args = []string{"claude"}
+		args = []string{"claude", "--dangerously-skip-permissions"}
 	}
 	bin, err := exec.LookPath(args[0])
 	if err != nil {
