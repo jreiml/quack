@@ -21,6 +21,7 @@ func cmdMenu(args []string) {
 		fatalf("usage: quack _menu <socket> <tty>")
 	}
 	s, tty := serverFromSocket(args[0]), args[1]
+	s.must("switch-client", "-c", tty, "-T", "root")
 	if guestTTYs(s)[tty] {
 		s.must("display-menu", "-c", tty, "-x", "C", "-y", "C", "-T", "#[align=centre] quack · guest ",
 			"Leave", "q", fmt.Sprintf(`run-shell -b "%s _act %s %s leave"`, quackBin(), s.name, tty))

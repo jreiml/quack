@@ -229,6 +229,25 @@ func TestInviteMenus(t *testing.T) {
 	eventually(t, "confirmed revocation", func() bool { v, _ := loadInvite(s, i.ID); return v.State == "revoked" })
 }
 
+func TestMenuReturnsKeys(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := server{quack(t, "new", "-n", "t-menu-keys", "--", "cat")}
+	defer s.run("kill-server")
+	g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "menu-keys")}
+	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
+	g.tmux("new-session", "-d", "-s", "g", "-x", "120", "-y", "30", bin+" attach "+s.name)
+	eventually(t, "host attached", func() bool { return hostAttached(s) })
+	g.tmux("send-keys", "-t", "g", "C-q")
+	eventually(t, "menu shown", func() bool { return strings.Contains(g.screen(), "Invite to terminal") })
+	g.tmux("send-keys", "-t", "g", "Escape")
+	eventually(t, "menu closed", func() bool { return !strings.Contains(g.screen(), "Invite to terminal") })
+	g.tmux("send-keys", "-t", "g", "q", "x")
+	eventually(t, "keys after the menu reach the session", func() bool { return strings.Contains(g.screen(), "qx") })
+	if !hostAttached(s) {
+		t.Fatal("typing q after closing the menu detached the host")
+	}
+}
+
 func TestCloseAndInviteCleanup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := server{quack(t, "new", "-n", "t-invite-cleanup", "--", "sleep", "300")}
