@@ -5,34 +5,41 @@ import (
 	"os"
 )
 
-const usage = `quack: shareable terminal sessions over tailcat
+const usage = `quack: share a terminal or pair Claude/Codex agents, peer-to-peer over tailcat
 
-  quack claude [-n name] [args...]    start Claude with --dangerously-skip-permissions
-  quack codex [-n name] [args...]     start Codex without the shared daemon, ready for pairing
-  quack new [-n name] [-s] [-- cmd]   start a session (default: $SHELL, or /bin/sh) and attach; -s shares it at once
+Start a session. These open a tmux session and take over this terminal, so run
+them yourself. An agent should not run them from its shell tool:
+  quack new [-n name] [-s] [-- cmd]   run cmd (default $SHELL) in a new session
+  quack claude [-n name] [args...]    run Claude with --dangerously-skip-permissions
+  quack codex [-n name] [args...]     run Codex with --no-daemon
+      --detach                        start in the background and print the name
+  Other claude/codex arguments go to the agent; -- ends quack's options.
+
+Sessions:
   quack ls                            list sessions
-  quack attach [name]                 reattach (default: most recent)
-  quack detach [name]                 detach your terminals, keep the session running
-  quack share [name]                  create and copy a new terminal invite; approval required
+  quack attach [name]                 reattach this terminal
+  quack detach [name]                 detach your terminals; the session keeps running
+  quack stop [name]                   end the session
+
+Sharing:
+  quack share [name]                  create and copy a terminal invite; you approve each guest
       --pair                          create an agent invite instead
-      --auto-approve                  let people in without asking (runs on after you detach)
-      --limit N                       only the first N connections, then reject new ones
-      --expires 2h                    revoke and disconnect after this long; use never for no expiry
-                                      automatic invites default to 24h
-  quack close [name]                  change open invites back to asking first; used invites stay closed
+      --auto-approve                  admit without asking (default expiry 24h)
+      --limit N                       with --auto-approve: only the next N connections
+      --expires 2h|never              revoke and disconnect after this long
   quack allow <code>                  let a waiting guest in
   quack decline <code>                turn away a waiting guest
-  quack unshare [name]                stop sharing; everyone is disconnected and the link stops working
-  quack stop [name]                   end the session
-  quack pair <link>                   pair Claude or Codex agents (run inside your agent)
-  quack send <name> --message <text>  send to a paired agent from Codex
-  quack unpair [name]                 end an agent pairing
-  quack join <link>                   join someone's session (Ctrl-Q q leaves)
+  quack close [name]                  make open invites ask first again
+  quack unshare [name]                revoke all invites and disconnect everyone
+  quack join <link>                   join someone's terminal
 
-For claude/codex, -n or --name names the quack session. Other arguments pass through;
--- ends quack option parsing. Claude also receives the chosen name.
+Agent pairing. Run by the agent through its shell tool, or typed with "!" in its prompt:
+  quack pair <link>                   pair this agent with the host's agent
+  quack send <name> --message <text>  Codex only: message a paired agent (Claude uses SendMessage)
+  quack unpair [name]                 end this agent's pairings
 
-Inside a session, Ctrl-Q opens the quack menu (invite to terminal, invite an agent, manage access, detach).
+Without a name, session commands use the current session, then the only one, then ask.
+Inside a session, Ctrl-Q opens the menu.
 `
 
 var onFatal func(msg string)

@@ -59,6 +59,15 @@ func TestNamedAgentLaunch(t *testing.T) {
 			}
 		})
 	}
+	for _, args := range [][]string{{"new", "-n", "t-no-tty"}, {"claude", "-n", "t-no-tty"}, {"codex"}} {
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "no terminal here") {
+			t.Fatalf("%q: %s %v", args, out, err)
+		}
+		if (server{"t-no-tty"}).alive() {
+			t.Fatal("started a session without a terminal")
+		}
+	}
 	for _, args := range [][]string{{"claude", "-n"}, {"codex", "--name="}, {"codex", "-n", "--"}} {
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "needs a session name") {

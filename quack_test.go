@@ -151,6 +151,9 @@ func TestMain(m *testing.M) {
 
 func quack(t *testing.T, args ...string) string {
 	t.Helper()
+	if len(args) > 0 && (args[0] == "new" || args[0] == "claude" || args[0] == "codex") {
+		args = append([]string{args[0], "--detach"}, args[1:]...)
+	}
 	out, err := exec.Command(bin, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("quack %s: %v\n%s", strings.Join(args, " "), err, out)

@@ -1,244 +1,17 @@
 # quack
 
-Let someone into your terminal. quack runs a shell, Claude, Codex or any command in a session you can share at any time, peer-to-peer over [tailcat](https://github.com/tailscale/tailcat). Invites control who can join your terminal or pair a Claude or Codex session.
+Let someone into your terminal, or let your Claude or Codex talk to theirs.
+quack runs a command in a tmux session that you can share at any time,
+peer-to-peer over [tailcat](https://github.com/tailscale/tailcat).
 
 ```
-quack new           start your shell in a hidden tmux session
-quack claude        start Claude in a hidden tmux session
-quack codex         start Codex in a hidden tmux session, ready for pairing
-Ctrl-Q  t a         copy a terminal invite that asks before admitting
-Ctrl-Q  c 1         copy a one-use agent invite, admitted without asking
-Ctrl-Q  m           manage invites and their connections
+quack new           your shell in a new session
+quack claude        Claude in a new session
+quack codex         Codex in a new session
+Ctrl-Q  t a         copy a terminal invite; you approve each guest
+Ctrl-Q  c 1         copy a one-use agent invite
+Ctrl-Q  m           manage invites and connections
 ```
-
-`quack new` opens `$SHELL`, falling back to `/bin/sh` if it is unset.
-Both agent shortcuts accept `-n name` or `--name name` for the quack/tmux
-session, also used by `quack attach name` and `quack share name`. Claude receives
-the same conversation name; Codex's conversation name remains independent
-(use `/rename` inside Codex).
-
-```
-quack claude -n auth-fix --model opus
-quack codex --name auth-fix --model gpt-6-astra
-quack claude -n terminal-name -- --name conversation-name
-```
-
-Other arguments go directly to the agent, preserving their values and order.
-`--` is optional: it ends quack's option parsing, so everything after it belongs
-to the agent, including `-n` or `--name`. `--name=auth-fix` also works.
-Claude uses `--dangerously-skip-permissions`; Codex uses `--no-daemon` so quack
-can discover its thread, with Codex's normal tool permissions. For immediate
-sharing or a different command, use `quack new -n name -s -- cmd`.
-
-## Invites and access
-
-Every invite has its own link, type (terminal or agent), admission policy,
-expiry and associated connections. Both types use the same tailcat server,
-but a terminal invite cannot pair an agent and an agent invite cannot attach a
-terminal. The clipboard contains exactly one command:
-
-```
-quack join tc…/<invite-id>
-! quack pair tc…/<invite-id>
-```
-
-Copying uses `pbcopy` on a local Mac, `wl-copy` on a Wayland desktop, or
-`xclip`/`xsel` on an X11 desktop. Over SSH, or without a working desktop
-clipboard tool, quack asks the terminal that opened the menu to copy the
-command using OSC 52. Terminal support and settings vary, so this path also
-shows the command for manual copying instead of claiming it was copied.
-Press Enter to close that view. Manage access → an invite → Show command
-opens it again. `quack share` also prints its new invite command to stdout.
-
-The Ctrl-Q menu has four main views:
-
-1. **Main:** invite to terminal (`t`), invite an agent (`c`), manage access (`m`),
-   stop all access (`s`), detach (`q`) and end session (`x`). Pending approval
-   requests appear at the top.
-2. **Create invite:** copy with approval required (`a`), allow one connection
-   (`1`), or allow anyone (`e`). Set expiry (`x`) before copying if needed.
-3. **Manage access:** select an invite, stop all agent messaging (`c`), or stop
-   all terminal access (`t`). Entries show an invite ID, policy, connections
-   and expiry.
-4. **Invite details:** copy its command, change admission or expiry, disconnect
-   individuals, revoke the invite, or revoke and disconnect everyone using it.
-
-Admission and expiry have small choice/input prompts. Bulk disconnections ask
-for confirmation. Escape goes back. Guests only get a Leave action.
-
-| Admission | Who gets in | After the allowance is used |
-|---|---|---|
-| **Ask before admitting** | whoever you approve by code | keeps asking |
-| **Allow one / next N** | the first N connections holding this invite | consumed; new connections are rejected |
-| **Allow anyone** | everyone holding this invite | until revoked or expired |
-
-An admitted terminal guest can reconnect using the same invite and saved key
-without consuming another admission. Each agent pairing is a new connection.
-Consumed invites remain manageable while they have connections or terminal
-reconnect permissions. Explicitly changing their admission policy can reopen
-them; `quack close` leaves them consumed. Revoked or expired invites cannot be
-reopened. Dead entries are removed after their connections finish.
-
-**Revoke invite** blocks future connections, including reconnects, and cancels
-pending requests; existing connections continue. **Revoke and disconnect all**
-also ends its terminal attachments or agent pairings. **Stop all agent messaging**
-revokes every agent invite and disconnects pairs, leaving terminal access
-running—useful for a handover. Disconnecting does not kill either underlying
-agent session. An individual disconnect removes its admission; an open invite
-can still be used to request admission again.
-
-Expiry revokes the invite and disconnects its connections. Once no usable
-invites or connections remain and the host is detached, the share server stops. Ask-first invites
-require an attached host and end when the last host detaches. From a detached
-session, attach before using `quack share` without automatic admission or
-`quack close`; use `--auto-approve` for an unattended handover. Automatically admitted access can remain
-after detach, including connections through consumed or revoked invites, until
-disconnected or expired. The menu defaults to no expiry; CLI automatic invites
-default to 24 hours. Explicitly choose an expiry for unattended access.
-
-From a terminal:
-
-```
-quack share                                  create a terminal invite, ask first
-quack share --pair                           create an agent invite, ask first
-quack share --pair --auto-approve --limit 1    create a one-use agent invite
-quack share --auto-approve --expires 2h       allow terminal connections for two hours
-quack close                                  change open invites back to ask first
-```
-
-Each `quack share` creates a new invite. Re-copy an existing command in Manage
-access. `quack unshare` revokes everything, disconnects everyone and stops the
-underlying server. Invites live in tmux options and disappear with the session.
-
-## Pairing agents
-
-Claude Code and Codex CLI sessions can message each other through an agent invite.
-Claude–Claude, Claude–Codex and Codex–Codex pairings use the same links.
-Use Ctrl-Q → c → a to copy an invite requiring host approval, or c → 1 to
-allow one pairing without asking. Ada Lovelace pastes the copied
-`! quack pair tc…/<invite-id>` into Claude's shell mode. This authorizes receiving
-messages on Ada's side. When approval is required, the host sees
-**Let brave-otter-482731 (Ada Lovelace) in (tiger-lamp)** in Ctrl-Q, with a reminder
-that approving lets that peer's messages reach the agent without asking again.
-Check the code before allowing. `quack allow` and `quack decline` work too.
-Terminal invites and their allowances are independent of agent invites.
-
-The command waits up to three seconds for a connection and approval. If ready,
-it prints a prompt introducing the other agent as a collaborator, explaining
-how to send messages, and encouraging collaboration when relevant to the current
-task. Pairing itself requires no introduction or investigation; idle agents wait
-for their human’s direction. Otherwise it prints the code and returns; a background process tells
-the agent when approval happens or connecting fails. No skill or plugin is needed.
-The host's agent also gets a pairing prompt. Claude uses native `SendMessage` to
-the inbox name in that prompt. Codex uses `quack send <name> --message <text>`
-through its shell tool. Only those explicit messages cross the link.
-Conversation history and files are not shared.
-
-Each live agent session has a name such as `brave-otter-482731`, displayed as
-`brave-otter-482731 (Ada Lovelace)`. It reuses the quack session name when there
-is one; standalone agents get an adjective-animal name. Six digits derived
-from a hash of the session and process identity reduce collisions. The name stays the same across pairings and
-reconnections to that live session, including when several peers connect to
-it. Restarting the agent gives it a new identity. The approval code remains
-separate, and neither a session name nor an owner label verifies a person.
-
-Pairing notices and incoming messages use the same display name. The prompt
-asks Claude to use `SendMessage` with the inbox name, also visible in
-`ListAgents`. If that name is already in use locally (for example, two Claudes
-on one machine pairing with the same remote session), the local inbox alias
-gets another six-digit suffix. The remote session's identity and display name
-stay the same. Always use the exact inbox name from your pairing prompt.
-
-The host's bar shows `🤖 brave-otter-482731 (Ada Lovelace)` and names waiting
-sessions alongside their approval code. `quack ls` counts active pairs.
-
-Run `quack unpair` inside your agent to end its pairings, or
-`quack unpair brave-otter-482731` to select a session. You can also select an
-owner with `quack unpair "Ada Lovelace"`, or an exact local inbox alias.
-Stopping agent access, stopping all sharing, invite expiry, host detach for an ask-first invite, or either agent exiting ends the pairing. The surviving
-agent gets an ending notice. Each direction allows 30 messages per rolling
-10 minutes, with a notice to the sender when the cap drops a message. Messages
-are limited to 32 KiB of text; attachments and delivery receipts are not bridged.
-
-Both peers need this version of quack for invite links (named pair protocol 2).
-Old links containing only a `tc…` address are no longer accepted; create a new
-invite to get a link with an invite ID.
-
-Claude pairing uses Claude Code's internal local messaging protocol, inspected in
-2.1.281 on macOS and Linux, and requires a live messaging socket and key file. The host
-must have exactly one live Claude or Codex session under the shared tmux window;
-the guest is identified from the calling agent process. The bridge declares
-`from-mode="bypass"`, matching quack's default Claude launch. This does not change
-Claude's tool permissions or settings. A prompting-mode Claude, or an explicit
-inbound hold/refuse policy, may still hold or reject messages. Socket delivery
-is not proof of model acceptance. Current permission modes are not reliably
-observable, so the menu warns about this limitation instead of claiming to
-detect mode differences.
-
-Pair tunnel keys exist only in memory. Normal shutdown removes the bridge's
-socket, local authentication key, Claude registry entry, inbox-name claim
-and temporary `$TMPDIR/quack/pair-<pid>.log` diagnostic log. A forced kill or
-machine crash cannot run cleanup; these files contain no message history.
-
-Codex support requires a CLI with `codex queue` (tested with 0.156.1). Start a
-host with `quack codex`, then send its first message before pairing.
-On the guest, ask Codex to run `quack pair tc…/<invite-id>` through its shell tool.
-The same stable peer names work in `quack send` and `quack unpair`; thread UUIDs
-stay internal. No plugin or API key configuration is needed beyond Codex's own
-setup.
-
-Codex receives labeled peer messages as queued user input. Idle sessions start
-a turn; busy sessions receive messages after their current turn. Messages do
-not grant human approval, and Codex retains its tool permissions. Its sandbox
-may require approval to run `quack pair`, `quack send` or `quack unpair` because
-they access local messaging state outside the workspace.
-
-Quack identifies Codex by its process and open thread-lock file, and ends the
-pairing when that process exits or releases the thread. This currently supports
-local CLI sessions that own their thread, not shared-daemon, remote App Server,
-or desktop sessions. A host with multiple open Codex threads is rejected rather
-than guessing a recipient. Codex inbox records live under
-`$CODEX_HOME/quack-pairs` (default `~/.codex/quack-pairs`); normal shutdown removes
-its records, keys, name claims and socket. Already queued Codex messages remain
-in Codex's queue when a pairing ends; disconnecting stops further delivery.
-
-## The status bar
-
-A one-line bar at the bottom always shows ` 🦆 Ctrl-Q`, so you know you're in quack and how to reach the menu. While sharing, it also shows what's going on:
-
-```
- 🦆 Ctrl-Q   🌐 2 invites   👀 Ada Lovelace
- 🦆 Ctrl-Q   🌐 2 invites   🤖 brave-otter-482731 (Ada Lovelace)
-```
-
-Waiting requests are highlighted in yellow with their approval code. After a
-menu action the bar briefly shows its result. Guests see the menu hint, host
-name and other terminal guests. Use Manage access for each invite's policy,
-remaining admissions and expiry. The bar counts only invites accepting new
-connections; connected guests and pairs appear separately.
-
-## Keys and endings
-
-You own the session; guests can only leave.
-
-| | Host | Guest |
-|---|---|---|
-| Esc / Ctrl-C | as usual | as usual, but at most one Ctrl-C every 3s reaches the session, so a double tap can't quit Claude |
-| Ctrl-D | as usual | ignored |
-| Ctrl-Q | menu | menu with Leave |
-| Ctrl-Q q | detach, the session keeps running | leave |
-| Ctrl-C while waiting to be let in | — | cancels |
-
-| What happens | Session | Sharing | Guest sees |
-|---|---|---|---|
-| guest leaves or closes their terminal | keeps running | on | — |
-| host detaches (Ctrl-Q q) | keeps running | ask-first invites stop; automatic access can remain | "The host left, so sharing stopped." |
-| host closes the terminal (e.g. Ctrl-W in kitty) | ends, unless automatic access remains or another host terminal is attached; then as detach | ends | "The host ended the session." |
-| host quits the command, or End session | ends | ends | "The host ended the session." |
-| Stop sharing | keeps running | stops | "The host stopped sharing." |
-| Turn away (someone waiting) | keeps running | on | "The host declined." They can ask again. |
-
-The shared window always has the host's terminal size. Guests with a bigger terminal see blank space around it; with a smaller one they see the top-left part.
 
 ## Install
 
@@ -246,57 +19,179 @@ The shared window always has the host's terminal size. Guests with a bigger term
 curl -fsSL https://raw.githubusercontent.com/jreiml/quack/main/install.sh | sh
 ```
 
-This puts a prebuilt binary for macOS or Linux in `~/.local/bin` (set `QUACK_INSTALL_DIR` to change it). Binaries are also on the [releases page](https://github.com/jreiml/quack/releases). With Go installed, `go install github.com/jreiml/quack@latest` works too.
+This installs a prebuilt macOS or Linux binary to `~/.local/bin` (override with
+`QUACK_INSTALL_DIR`), and tmux if needed. quack needs tmux 3.3 or newer. You can
+also download a binary from [releases](https://github.com/jreiml/quack/releases)
+or run `go install github.com/jreiml/quack@latest`.
 
-It needs tmux 3.3 or newer (`brew install tmux`, `apt install tmux`).
+## Sessions
 
-## Commands
+`quack new`, `quack claude` and `quack codex` start a session in its own tmux
+server and attach your terminal to it. Run them yourself in a terminal. Without
+a terminal (for example, from an agent's shell tool) they refuse to run unless
+you pass `--detach`. They also refuse inside a quack session.
 
-| | |
+```
+quack new -n build -- make watch         any command (default $SHELL)
+quack claude -n auth-fix --model opus    Claude with --dangerously-skip-permissions
+quack codex --name auth-fix              Codex with --no-daemon, so quack can find its thread
+quack new --detach -- sleep 600          start in the background and print the name
+```
+
+`-n`/`--name` names the session. Claude also gets this name for its conversation;
+Codex doesn't (use `/rename` there). Other arguments go to the agent. Use `--`
+to pass `-n` or `--name` to the agent itself. For Claude without
+`--dangerously-skip-permissions`, use `quack new -- claude`.
+
+Ctrl-Q opens the menu. `Ctrl-Q q` detaches and leaves the session running.
+Reattach with `quack attach`, list sessions with `quack ls` and end one with
+`quack stop`. Session commands without a name use the current session, then the
+only one, then ask.
+
+## Sharing
+
+An invite is a link of the form `tc…/<invite-id>`. There are two types:
+terminal invites (`quack join <link>`) and agent invites (`! quack pair <link>`).
+Terminal invites can't pair agents, and agent invites can't attach terminals.
+Copying an invite puts that command on your clipboard. quack uses `pbcopy`,
+`wl-copy`, `xclip` or `xsel`. Over SSH, it falls back to OSC 52 and also shows
+the command so you can copy it yourself.
+
+| Admission | Who gets in |
 |---|---|
-| `quack claude [-n name] [args...]` | start Claude with `--dangerously-skip-permissions`; forward agent arguments |
-| `quack codex [-n name] [args...]` | start Codex with `--no-daemon`; forward agent arguments |
-| `quack new [-n name] [-s] [-- cmd]` | start a session (default `$SHELL`, or `/bin/sh`) and attach; `-s` shares it right away |
-| `quack ls` | sessions with dir, age, attached, shared, guests, waiting |
-| `quack attach [name]` / `quack detach` | reattach / detach; the session keeps running |
-| `quack share [--pair] [name]` | create and copy a new terminal or agent invite |
-| `quack share --auto-approve [--limit N] [--expires 2h]` | create an automatic invite (anyone, or the next N); add `--pair` for agents |
-| `quack close [name]` | change open invites back to ask first; consumed invites stay closed |
-| `quack allow <code>` | let a waiting guest in |
-| `quack decline <code>` | turn away a waiting guest |
-| `quack unshare [name]` | stop sharing; the link stops working and the session keeps running |
-| `quack stop [name]` | end the session |
-| `quack pair <link>` | pair your Claude or Codex; run through the agent’s shell |
-| `quack send <name> --message <text>` | send from Codex to a paired agent by its inbox name |
-| `quack unpair [name]` | end your agent's pairings, or select a peer/inbox by name |
-| `quack join <link>` | guest side; Ctrl-Q opens the guest menu, `q` leaves |
+| **Ask first** (default) | whoever you approve by their two-word code |
+| **Allow next N** | the first N connections; then the invite is used up |
+| **Allow anyone** | anyone with the link, until it is revoked or expires |
 
-For session commands without a name, quack uses the session you're in (`$QUACK_SESSION`), then the only session running, then a picker.
+Create invites from the menu or the CLI:
 
-## How it works
+```
+quack share                                    terminal invite, ask first
+quack share --pair                             agent invite, ask first
+quack share --pair --auto-approve --limit 1    one-use agent invite
+quack share --auto-approve --expires 2h        open terminal invite for two hours
+quack allow <code> / quack decline <code>      answer a waiting guest
+quack close                                    make open invites ask first again
+quack unshare                                  revoke everything and disconnect everyone
+```
 
-- Each session is its own tmux server (`tmux -L quack-<name>`) with no prefix key and no key bindings other than Ctrl-Q, so it feels like running the command directly. The status bar shows the host and guests different text.
-- `share` starts a tailcat server inside that tmux server, as a hidden `_serve` session. The `tc…` address contains the server's key and a pre-shared key; each invite adds an independent random 128-bit ID. Stopping the server invalidates all its links.
-- Every SSH connection runs `quack _gate`. It derives a two-word code from the guest's tunnel key, which `quack join` also shows on the guest's side. It checks the invite type, revocation, expiry and admission allowance, then waits for approval if required. An admitted terminal guest attaches; an admitted agent gets the message bridge.
-- Guests keep one key per link in `~/.config/quack/keys/`, so admitted guests can reconnect until the invite is revoked or expires. Several joins to the same link from one machine each get their own key, and keys unused for 30 days are deleted.
-- Logs: `$TMPDIR/quack/<name>.log`.
+In the menu, **Manage access** lists every invite. You can copy an invite again,
+change its admission or expiry, disconnect individual people, revoke it, or
+revoke it and disconnect everyone who used it. You can also stop all terminal
+access or all agent pairing at once. A revoked invite admits nobody new, but
+existing connections stay up. Disconnecting never kills the session.
+
+Ask-first invites need you to be attached, so they stop when you detach.
+Automatic invites keep working after you detach until they expire. Menu invites
+never expire unless you set an expiry. CLI automatic invites expire after 24h.
+When nothing usable is left and you're detached, the share server stops.
+Admitted terminal guests can reconnect with the same invite and saved key.
+Invites live in the tmux session and disappear with it.
+
+The status bar always shows ` 🦆 Ctrl-Q`, plus open invites, guests, pairs and
+waiting requests (in yellow, with their code).
+
+### Keys and endings
+
+Guests can only leave. At most one Ctrl-C every 3s from a guest reaches the
+session, so a double tap can't quit Claude, and guests can't send Ctrl-D.
+The shared window uses the host's terminal size.
+
+| Event | Session | Sharing |
+|---|---|---|
+| guest leaves | keeps running | on |
+| host detaches (`Ctrl-Q q`) | keeps running | ask-first invites stop; automatic access stays |
+| host closes the terminal | ends, unless automatic access or another host terminal remains; then as detach | ends, or as detach |
+| command exits, or End session | ends | ends |
+
+## Pairing agents
+
+Paired Claude Code and Codex CLI sessions can message each other in any
+combination. Only messages they send each other cross the link. Conversation
+history and files are not shared.
+
+1. The host copies an agent invite (`Ctrl-Q c a`, or `c 1` for no approval).
+2. The guest pastes `! quack pair tc…/<invite-id>` into their agent's prompt.
+   The agent can also run the command through its shell tool.
+3. If approval is required, the host sees
+   **Let brave-otter-482731 (Ada Lovelace) in** in Ctrl-Q, with a code to check.
+4. Both agents get a prompt that introduces the peer. Claude replies with its
+   native `SendMessage` to the inbox name in that prompt. Codex replies with
+   `quack send <name> --message <text>`.
+
+`quack pair` waits up to three seconds. If the pairing isn't ready by then, it
+prints the approval code and keeps connecting in the background. The agent is
+told once the host lets it in or the connection fails. Idle agents wait for
+their human instead of starting a conversation.
+
+Each agent session has a stable name such as `brave-otter-482731`, taken from
+the quack session name or generated. The six digits come from the session and
+process identity. The name stays the same across reconnects and stays unique
+per live agent session. Neither the name nor the owner label proves who
+someone is. Check the approval code.
+
+`quack unpair [name]` ends the agent's pairings, or only the one you name by
+peer, owner or inbox. Pairings also end when the host disconnects them or stops
+agent access, the invite expires, an ask-first host detaches, or either agent
+exits. The
+other agent is told when a pairing ends. Each direction allows 30 messages per
+10 minutes, each up to 32 KiB of text.
+
+**Claude.** This uses Claude Code's internal local messaging protocol, checked
+against 2.1.281 on macOS and Linux. The host window must contain exactly one live
+Claude or Codex. Messages are marked `from-mode="bypass"`, as for quack's
+default launch. Claude can still hold or refuse them in a prompting permission
+mode or under an inbound message policy.
+
+**Codex.** This requires `codex queue` (tested with 0.156.1) and a local CLI
+session that owns its thread. Shared-daemon, App Server and desktop sessions
+don't work. Peer messages arrive as queued user input: an idle Codex starts a
+turn, and a busy one reads them after its current turn. A new Codex has no
+saved thread until its first message. quack delivers that first message through
+Codex's queue database with `sqlite3`. Without `sqlite3`, send Codex a message
+before pairing. `quack send` works inside Codex's sandbox. `quack pair` and
+`quack unpair` don't, so run them with escalated permissions or type them with
+`!`. Pair records live in `$CODEX_HOME/quack-pairs`.
+
+Tunnel keys exist only in memory. On a normal shutdown, quack removes sockets,
+keys, inbox records and the `$TMPDIR/quack/pair-<pid>.log` log. None of these
+contain message history.
 
 ## Security
 
-- In a normal share, the link alone doesn't get anyone in: every new guest needs your `allow`.
-- With automatic admission, the invite is the key: whoever holds it gets in up to its allowance and expiry. Send it privately. A consumed invite rejects new connections; create another if the intended recipient did not get in.
-- Revoke an invite to block future connections; revoke and disconnect to also end its existing connections. Stop agent or terminal access independently in Manage access.
-- An allowed guest can type, which means they can run anything as you, and by default Claude runs with `--dangerously-skip-permissions`, so it won't ask before acting on what they type. Only allow people you're talking to right now. Use `quack new -- claude` for a session that asks.
-- A paired agent's messages reach a Claude or Codex session that may have broad tool permissions and act as you. Claude may run with `--dangerously-skip-permissions`. Pairing approval grants ongoing message access; prompt-injection checks are not an authorization boundary. Only pair with people you trust. Automatic agent invites admit agents holding that invite.
-- Traffic is end-to-end encrypted (WireGuard). It goes peer-to-peer where NAT allows, otherwise through Tailscale's public DERP relays, which see only encrypted packets.
-- The guest's display name comes from their git config and isn't verified. The code is what identifies them.
+- With ask-first invites, the link alone doesn't let anyone in. You approve
+  each person by code. Display names come from git config and aren't verified.
+- With automatic admission, anyone with the link gets in, up to the invite's
+  limit and expiry. Send it privately and set an expiry.
+- A terminal guest can type, so they can run anything as you. `quack claude`
+  skips Claude's permission prompts, so Claude won't ask before acting on what a
+  guest types.
+- A paired agent's messages reach an agent that may have broad permissions.
+  Approving a pairing grants ongoing message access, and prompt-injection
+  checks don't make it safe. Only pair with people you trust.
+- Traffic is end-to-end encrypted with WireGuard. It goes direct where NAT
+  allows, and otherwise through Tailscale's DERP relays, which only see
+  encrypted packets.
 
-Guests need `quack` too: `quack join` gives them a terminal and sends keepalives. The host drops a guest after 45 seconds of silence.
+## How it works
+
+- Each session is its own tmux server (`tmux -L quack-<name>`) with Ctrl-Q as
+  its only key binding.
+- `share` starts a tailcat server inside that tmux server. The `tc…` address
+  holds the server key and a pre-shared key. Each invite adds a random 128-bit
+  ID.
+- Each SSH connection runs `quack _gate`. The gate derives the guest's code from
+  their key and checks the invite's type, expiry and allowance. It waits for
+  approval if needed, then attaches the guest's terminal or starts the message
+  bridge.
+- Guests keep one key per link in `~/.config/quack/keys/`, which is deleted
+  after 30 days unused. The host drops a guest after 45s without a keepalive.
+- Logs are in `$TMPDIR/quack/<name>.log`.
 
 ## Tests
 
 ```
-go test ./...                     # unit + tmux tests
+go test ./...                     # unit and tmux tests
 QUACK_NET_TEST=1 go test ./...    # also a real tailcat round trip over DERP
 ```
 

@@ -47,11 +47,17 @@ func isTTY() bool {
 
 func cmdAgent(agent string, args []string) {
 	name := ""
+	detach := false
 	var forwarded []string
 	for len(args) > 0 {
 		if args[0] == "--" {
 			forwarded = append(forwarded, args[1:]...)
 			break
+		}
+		if args[0] == "--detach" {
+			detach = true
+			args = args[1:]
+			continue
 		}
 		flag, value, inline := strings.Cut(args[0], "=")
 		if flag != "-n" && flag != "--name" {
@@ -75,6 +81,9 @@ func cmdAgent(agent string, args []string) {
 	if name != "" {
 		launch = append(launch, "-n", name)
 	}
+	if detach {
+		launch = append(launch, "--detach")
+	}
 	launch = append(launch, "--", agent)
 	if agent == "claude" {
 		launch = append(launch, "--dangerously-skip-permissions")
@@ -89,7 +98,7 @@ func cmdAgent(agent string, args []string) {
 
 func cmdNew(args []string) {
 	name := ""
-	share := false
+	share, detach := false, false
 	for len(args) > 0 && args[0] != "--" {
 		switch args[0] {
 		case "-n", "--name":
@@ -101,8 +110,19 @@ func cmdNew(args []string) {
 		case "-s", "--share":
 			share = true
 			args = args[1:]
+		case "-d", "--detach":
+			detach = true
+			args = args[1:]
 		default:
 			fatalf("unknown flag %q (put the command after --)", args[0])
+		}
+	}
+	if !detach {
+		if inside := os.Getenv("QUACK_SESSION"); inside != "" {
+			fatalf("already inside quack session %s; detach with Ctrl-Q q first, or pass --detach to start another one in the background", inside)
+		}
+		if !isTTY() {
+			fatalf("this starts a tmux session and attaches it to your terminal, but there is no terminal here.\nAgents: don't start sessions from a shell tool; ask your human to run this in their own terminal, or use quack pair <link> to talk to another agent.\nTo start a background session anyway, pass --detach.")
 		}
 	}
 	if len(args) > 0 {
@@ -148,7 +168,7 @@ func cmdNew(args []string) {
 		startShare(s)
 		createInvite(s, "join", -1, 0)
 	}
-	if !isTTY() {
+	if detach {
 		fmt.Println(name)
 		return
 	}
