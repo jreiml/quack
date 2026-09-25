@@ -1,6 +1,6 @@
 {
   "name": "quack",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Set up quack and work with paired Claude and Codex sessions",
   "author": {
     "name": "Johanna Reiml",
