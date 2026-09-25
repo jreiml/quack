@@ -100,12 +100,7 @@ func showMenu(s server, tty, view string, args []string) {
 		}
 		page = min(page, max(0, (len(all)-1)/8))
 		for n, i := range all[page*8 : min(len(all), page*8+8)] {
-			count := 0
-			for _, e := range es {
-				if e.invite == i.ID && e.state != "waiting" {
-					count++
-				}
-			}
+			count := connected(es, i.ID)
 			label := i.label() + " · " + i.ID[:6]
 			if count > 0 {
 				label += fmt.Sprintf(" · %d connected", count)

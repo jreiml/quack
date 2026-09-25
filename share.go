@@ -9,11 +9,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/tailscale/tailcat"
@@ -36,7 +38,7 @@ func openLog(name string) (*log.Logger, *os.File) {
 	return log.New(f, "", log.LstdFlags), f
 }
 
-func startShare(s server) string {
+func startShare(s host) string {
 	if s.shared() {
 		if addr := s.get("addr"); addr != "" {
 			return addr
@@ -47,32 +49,46 @@ func startShare(s server) string {
 	s.unset("invites_ready")
 	s.unset("error")
 	s.set("host", displayName())
-	s.must("new-session", "-d", "-s", "_serve", "--", quackBin(), "_serve", s.name)
+	s.startServe()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		if addr := s.get("addr"); addr != "" {
-			refreshStatus(s)
+			s.status()
 			return addr
 		}
 		if msg := s.get("error"); msg != "" {
 			fatalf("sharing failed: %s", msg)
 		}
 		if !s.shared() {
-			fatalf("sharing failed; see %s", logPath(s.name))
+			fatalf("sharing failed; see %s", logPath(s.hostName()))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	fatalf("sharing timed out; see %s", logPath(s.name))
+	fatalf("sharing timed out; see %s", logPath(s.hostName()))
 	return ""
 }
 
-func cmdShare(args []string) {
-	auto, limit, expires := false, 0, time.Duration(0)
-	kind := "join"
-	limitSet, expiresSet := false, false
+type inviteFlags struct {
+	ask, auto, disconnect, all bool
+	limit                      int
+	limitSet, expiresSet       bool
+	expires                    time.Duration
+	session                    []string
+}
+
+func parseInviteFlags(args []string, allowed ...string) (inviteFlags, []string) {
+	var f inviteFlags
 	var rest []string
 	for len(args) > 0 {
 		flag, val, hasVal := strings.Cut(args[0], "=")
+		if !strings.HasPrefix(flag, "-") {
+			rest = append(rest, args[0])
+			args = args[1:]
+			continue
+		}
+		if !slices.Contains(allowed, flag) {
+			fatalf("unknown flag %q", flag)
+		}
 		value := func() string {
 			if hasVal {
 				args = args[1:]
@@ -86,82 +102,243 @@ func cmdShare(args []string) {
 			return v
 		}
 		switch flag {
-		case "--pair":
-			kind = "pair"
+		case "--ask":
+			f.ask = true
 			args = args[1:]
 		case "--auto-approve":
-			auto = true
+			f.auto = true
 			args = args[1:]
+		case "--disconnect":
+			f.disconnect = true
+			args = args[1:]
+		case "--all":
+			f.all = true
+			args = args[1:]
+		case "-n":
+			f.session = []string{value()}
 		case "--limit":
 			n, err := strconv.Atoi(value())
 			if err != nil || n < 1 {
 				fatalf("--limit needs a number of people, 1 or more")
 			}
-			limit, limitSet = n, true
+			f.limit, f.limitSet = n, true
 		case "--expires":
-			expires, expiresSet = inviteExpiry(value()), true
-		default:
-			if strings.HasPrefix(flag, "-") {
-				fatalf("unknown flag %q", flag)
-			}
-			rest = append(rest, args[0])
-			args = args[1:]
+			f.expires, f.expiresSet = inviteExpiry(value()), true
 		}
 	}
-	if limitSet && !auto {
+	if f.limitSet && !f.auto {
 		fatalf("--limit only works with --auto-approve")
 	}
-	s := target(rest, true)
-	if !auto && !hostAttached(s) {
-		fatalf("ask-first invites need an attached host; run quack attach %s, or use --auto-approve for a handover", s.name)
+	if f.ask && f.auto {
+		fatalf("choose either --ask or --auto-approve")
 	}
-	startShare(s)
+	return f, rest
+}
+
+const inviteUsage = `usage:
+  quack invite new terminal|agent [-n session] [--auto-approve [--limit N]] [--expires 2h|never]
+  quack invite ls [-n session]
+  quack invite set <id> --ask | --auto-approve [--limit N] [--expires 2h|never]
+  quack invite revoke <id> [--disconnect]
+  quack invite revoke --all [-n session]
+  quack invite copy <id>`
+
+func cmdInvite(args []string) {
+	if len(args) == 0 {
+		fatalf("%s", inviteUsage)
+	}
+	switch args[0] {
+	case "new":
+		cmdInviteNew(args[1:])
+	case "ls", "list":
+		cmdInviteLs(args[1:])
+	case "set":
+		cmdInviteSet(args[1:])
+	case "revoke":
+		cmdInviteRevoke(args[1:])
+	case "copy":
+		cmdInviteCopy(args[1:])
+	default:
+		fatalf("unknown invite command %q\n%s", args[0], inviteUsage)
+	}
+}
+
+func cmdInviteNew(args []string) {
+	kinds := map[string]string{"terminal": "join", "agent": "pair"}
+	if len(args) == 0 || kinds[args[0]] == "" {
+		fatalf("usage: quack invite new terminal|agent [-n session] [--auto-approve [--limit N]] [--expires 2h|never]")
+	}
+	kind := kinds[args[0]]
+	f, rest := parseInviteFlags(args[1:], "-n", "--auto-approve", "--limit", "--expires")
+	if len(rest) > 0 {
+		fatalf("unexpected %q; choose a session with -n", rest[0])
+	}
+	var h host
+	if kind == "join" {
+		h = target(f.session, true)
+	} else {
+		h = agentInviteHost(f.session)
+	}
+	if !f.auto && !h.attached() {
+		fatalf("ask-first invites need an attached host; run quack attach %s, or use --auto-approve for a handover", h.hostName())
+	}
+	startShare(h)
 	remaining := -1
-	if auto {
-		remaining = limit
-		if !expiresSet {
-			expires = defaultExpiry
+	if f.auto {
+		remaining = f.limit
+		if !f.expiresSet {
+			f.expires = defaultExpiry
 		}
 	}
-	i := createInvite(s, kind, remaining, expires)
-	msg := i.command(s)
-	refreshStatus(s)
+	i := createInvite(h, kind, remaining, f.expires)
+	h.status()
+	printInvite(h, i)
+}
+
+func agentInviteHost(args []string) host {
+	if len(args) > 0 || os.Getenv("QUACK_SESSION") != "" {
+		return targetHost(args)
+	}
+	command := strings.Join(append([]string{"quack"}, os.Args[1:]...), " ")
+	refuseCodexSandbox(nil, command)
+	a, codex, err := callerAgent()
+	if err != nil {
+		if os.Getenv("CODEX_THREAD_ID") != "" {
+			refuseCodexSandbox(err, command)
+			fatalf("%v", err)
+		}
+		return target(nil, true)
+	}
+	if h, ok := agentHostFor(a, codex); ok {
+		return h
+	}
+	return newAgentHost(a, codex)
+}
+
+func printInvite(h host, i invite) {
+	msg := i.command(h)
 	fmt.Println(msg)
 	if copyToClipboard(msg) {
 		fmt.Fprintln(os.Stderr, "(copied to clipboard)")
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s\n", s.name, i.label())
+	fmt.Fprintf(os.Stderr, "%s: %s · %s\n", h.hostName(), i.label(), i.ID[:6])
 }
 
-func cmdClose(args []string) {
-	s := target(args, true)
-	if !hostAttached(s) {
-		fatalf("ask-first access needs an attached host; run quack attach %s, or quack unshare %s to end access", s.name, s.name)
+func cmdInviteLs(args []string) {
+	f, rest := parseInviteFlags(args, "-n")
+	if len(rest) > 0 {
+		fatalf("unexpected %q; choose a session with -n", rest[0])
 	}
-	if !s.shared() {
-		fatalf("%s is not shared", s.name)
+	list := hosts()
+	if len(f.session) > 0 {
+		list = []host{targetHost(f.session)}
 	}
-	for _, i := range invites(s) {
-		if i.State == "open" {
-			if !i.expired() {
-				n := -1
-				changeInvite(s, i.ID, &n, nil)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	n := 0
+	for _, h := range list {
+		es := connections(h)
+		for _, i := range invites(h) {
+			if n == 0 {
+				fmt.Fprintln(w, "ID\tSESSION\tINVITE\tCONNECTED\tEXPIRES")
+			}
+			expires := "never"
+			if i.Expires != 0 {
+				expires = clock(time.Unix(i.Expires, 0))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", i.ID[:6], h.hostName(), i.label(), connected(es, i.ID), expires)
+			n++
+		}
+	}
+	if n == 0 {
+		fmt.Fprintln(os.Stderr, "no invites; create one with: quack invite new terminal|agent")
+		return
+	}
+	w.Flush()
+}
+
+func findInvite(args []string) (host, invite) {
+	if len(args) != 1 {
+		fatalf("%s", inviteUsage)
+	}
+	prefix := strings.ToLower(args[0])
+	var hs []host
+	var is []invite
+	for _, h := range hosts() {
+		for _, i := range invites(h) {
+			if strings.HasPrefix(i.ID, prefix) {
+				hs, is = append(hs, h), append(is, i)
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "%s: open invites now ask first\n", s.name)
-}
-
-func cmdUnshare(args []string) {
-	s := target(args, true)
-	if !s.shared() {
-		fatalf("%s is not shared", s.name)
+	switch len(is) {
+	case 0:
+		fatalf("no invite %s (see quack invite ls)", args[0])
+	case 1:
+		return hs[0], is[0]
 	}
-	unshare(s, "The host stopped sharing.")
-	fmt.Fprintf(os.Stderr, "%s is no longer shared; the old link is dead\n", s.name)
+	fatalf("several invites start with %s; use more of the ID", args[0])
+	return nil, invite{}
 }
 
-func unshare(s server, reason string) {
+func cmdInviteSet(args []string) {
+	f, rest := parseInviteFlags(args, "--ask", "--auto-approve", "--limit", "--expires")
+	h, i := findInvite(rest)
+	var remaining *int
+	switch {
+	case f.ask:
+		if !h.attached() {
+			fatalf("ask-first invites need an attached host; run quack attach %s", h.hostName())
+		}
+		n := -1
+		remaining = &n
+	case f.auto:
+		remaining = &f.limit
+	}
+	var expiry *time.Duration
+	if f.expiresSet {
+		expiry = &f.expires
+	}
+	if remaining == nil && expiry == nil {
+		fatalf("usage: quack invite set <id> --ask | --auto-approve [--limit N] [--expires 2h|never]")
+	}
+	changeInvite(h, i.ID, remaining, expiry)
+	i, _ = loadInvite(h, i.ID)
+	fmt.Fprintf(os.Stderr, "%s: %s · %s\n", h.hostName(), i.label(), i.ID[:6])
+}
+
+func cmdInviteRevoke(args []string) {
+	f, rest := parseInviteFlags(args, "--disconnect", "--all", "-n")
+	if f.all {
+		if len(rest) > 0 || f.disconnect {
+			fatalf("--all takes no invite ID and always disconnects")
+		}
+		h := targetHost(f.session)
+		if !h.shared() {
+			fatalf("%s has no invites", h.hostName())
+		}
+		unshare(h, "The host stopped sharing.")
+		fmt.Fprintf(os.Stderr, "%s: revoked all invites; old links no longer work\n", h.hostName())
+		return
+	}
+	if len(f.session) > 0 {
+		fatalf("-n only works with --all")
+	}
+	h, i := findInvite(rest)
+	revokeInvite(h, i.ID, f.disconnect, "The host revoked the invite and ended access.")
+	h.status()
+	fmt.Fprintf(os.Stderr, "%s: revoked %s\n", h.hostName(), i.ID[:6])
+}
+
+func cmdInviteCopy(args []string) {
+	_, rest := parseInviteFlags(args)
+	h, i := findInvite(rest)
+	if i.State != "open" || i.expired() {
+		fatalf("invite is no longer accepting connections")
+	}
+	printInvite(h, i)
+}
+
+func unshare(s host, reason string) {
 	unlock := lockShare(s)
 	if s.get("closing") != "" {
 		unlock()
@@ -176,7 +353,7 @@ func unshare(s server, reason string) {
 	for hex := range s.opts("wait_") {
 		s.set("bye_"+hex, reason)
 		s.unset("wait_" + hex)
-		s.must("wait-for", "-S", channel(hex))
+		s.wake(hex)
 	}
 	for _, g := range append(guests(s), pairs(s)...) {
 		pid := -g.pid
@@ -190,7 +367,7 @@ func unshare(s server, reason string) {
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && len(s.opts("pid_")) > 0; {
 		time.Sleep(50 * time.Millisecond)
 	}
-	s.must("kill-session", "-t", "=_serve")
+	s.stopServe()
 	for id := range s.opts("pair_") {
 		s.unset("pair_" + id)
 	}
@@ -203,15 +380,18 @@ func unshare(s server, reason string) {
 		}
 	}
 	s.unset("addr")
-	refreshStatus(s)
+	s.status()
 }
 
 func cmdServe(args []string) {
 	if len(args) != 1 {
 		fatalf("usage: quack _serve <name>")
 	}
-	s := server{args[0]}
-	logger, f := openLog(s.name)
+	s, ok := hostByName(args[0])
+	if !ok {
+		fatalf("no session named %s", args[0])
+	}
+	logger, f := openLog(s.hostName())
 	if err := unix.Dup2(int(f.Fd()), 2); err != nil {
 		logger.Fatalf("dup2: %v", err)
 	}
@@ -231,12 +411,22 @@ func cmdServe(args []string) {
 		s.set("error", err.Error())
 		logger.Fatalf("listen: %v", err)
 	}
-	handler := srv.SSHConnHandler(tailcat.SSHOptions{Exec: []string{quackBin(), "_gate", s.name}})
+	handler := srv.SSHConnHandler(tailcat.SSHOptions{Exec: []string{quackBin(), "_gate", s.hostName()}})
 	s.set("addr", string(srv.TailcatAddr()))
 	logger.Printf("sharing as %s", srv.TailcatAddr())
 	var mu sync.Mutex
 	open := map[*watchedConn]bool{}
-	go shutdownOnSignal(srv, &mu, open, logger)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+	if a, ok := s.(agentHost); ok {
+		go func() {
+			for a.alive() {
+				time.Sleep(2 * time.Second)
+			}
+			stop <- syscall.SIGTERM
+		}()
+	}
+	go shutdown(s, srv, stop, &mu, open, logger)
 	go expireLoop(s, logger)
 	for {
 		c, err := ln.Accept()
@@ -260,10 +450,8 @@ func cmdServe(args []string) {
 	}
 }
 
-func shutdownOnSignal(srv *tailcat.Server, mu *sync.Mutex, open map[*watchedConn]bool, logger *log.Logger) {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-	logger.Printf("shutting down on %v", <-sig)
+func shutdown(s host, srv *tailcat.Server, stop chan os.Signal, mu *sync.Mutex, open map[*watchedConn]bool, logger *log.Logger) {
+	logger.Printf("shutting down on %v", <-stop)
 	count := func() int {
 		mu.Lock()
 		defer mu.Unlock()
@@ -278,6 +466,9 @@ func shutdownOnSignal(srv *tailcat.Server, mu *sync.Mutex, open map[*watchedConn
 	}
 	mu.Unlock()
 	time.Sleep(300 * time.Millisecond)
+	if a, ok := s.(agentHost); ok {
+		a.remove()
+	}
 	srv.Close()
 	os.Exit(0)
 }
@@ -327,7 +518,7 @@ var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 func connID(remote string) string { return nonAlnum.ReplaceAllString(remote, "_") }
 
-func hangUp(s server, remote string, logger *log.Logger) {
+func hangUp(s host, remote string, logger *log.Logger) {
 	id := connID(remote)
 	value := s.get("pid_" + id)
 	pair := strings.HasPrefix(value, "pair:")

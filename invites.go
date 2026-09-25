@@ -36,7 +36,7 @@ func splitInviteLink(link string) (string, string) {
 	return addr, id
 }
 
-func (i invite) save(s server) {
+func (i invite) save(s host) {
 	b, err := json.Marshal(i)
 	if err != nil {
 		fatalf("encoding invite: %v", err)
@@ -44,7 +44,7 @@ func (i invite) save(s server) {
 	s.set("invite_"+i.ID, string(b))
 }
 
-func loadInvite(s server, id string) (invite, bool) {
+func loadInvite(s host, id string) (invite, bool) {
 	if !validInviteID(id) {
 		return invite{}, false
 	}
@@ -59,7 +59,7 @@ func loadInvite(s server, id string) (invite, bool) {
 	return i, i.ID == id
 }
 
-func invites(s server) []invite {
+func invites(s host) []invite {
 	var out []invite
 	for id, raw := range s.opts("invite_") {
 		var i invite
@@ -79,9 +79,12 @@ func invites(s server) []invite {
 	return out
 }
 
-func createInvite(s server, kind string, remaining int, expiry time.Duration) invite {
+func createInvite(s host, kind string, remaining int, expiry time.Duration) invite {
 	if kind != "join" && kind != "pair" || remaining < -1 || expiry < 0 {
 		fatalf("invalid invite settings")
+	}
+	if _, ok := s.(agentHost); ok && kind == "join" {
+		fatalf("%s is an agent, not a terminal session; it can only have agent invites", s.hostName())
 	}
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -112,7 +115,7 @@ func (i *invite) setAdmission(n int) {
 	}
 }
 
-func openInviteCount(s server) int {
+func openInviteCount(s host) int {
 	count := 0
 	for _, i := range invites(s) {
 		if i.State == "open" && !i.expired() {
@@ -122,7 +125,7 @@ func openInviteCount(s server) int {
 	return count
 }
 
-func (i invite) command(s server) string {
+func (i invite) command(s host) string {
 	prefix := "quack join "
 	if i.Kind == "pair" {
 		prefix = "! quack pair "
@@ -151,7 +154,7 @@ func (i invite) label() string {
 	return kind + " · " + policy
 }
 
-func (i *invite) take(s server) bool {
+func (i *invite) take(s host) bool {
 	if i.State != "open" || i.expired() || i.Admission == "ask" {
 		return false
 	}
@@ -168,7 +171,7 @@ func (i *invite) take(s server) bool {
 	return true
 }
 
-func requestAdmission(s server, inviteID, kind, id, who, code string) error {
+func requestAdmission(s host, inviteID, kind, id, who, code string) error {
 	unlock := lockShare(s)
 	defer unlock()
 	if s.get("closing") != "" {
@@ -202,33 +205,43 @@ func requestAdmission(s server, inviteID, kind, id, who, code string) error {
 	return nil
 }
 
-func connections(s server) []entry { return append(guests(s), pairs(s)...) }
+func connections(s host) []entry { return append(guests(s), pairs(s)...) }
+
+func connected(es []entry, inviteID string) int {
+	n := 0
+	for _, e := range es {
+		if e.invite == inviteID && e.state != "waiting" {
+			n++
+		}
+	}
+	return n
+}
 
 func disconnectEntry(e entry, reason string) {
 	e.s.set("bye_"+e.hex, reason)
 	e.s.unset("ok_" + e.hex)
 	e.s.unset("wait_" + e.hex)
-	e.s.must("wait-for", "-S", channel(e.hex))
+	e.s.wake(e.hex)
 	if e.pair && e.pid > 0 {
 		if err := syscall.Kill(e.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
 			fatalf("disconnecting %s: %v", e.name, err)
 		}
-	} else if e.tty != "" {
-		if _, err := e.s.run("detach-client", "-t", e.tty); err != nil {
-			if strings.Contains(e.s.must("list-clients", "-F", "#{client_tty}"), e.tty) {
+	} else if s, ok := e.s.(server); ok && e.tty != "" {
+		if _, err := s.run("detach-client", "-t", e.tty); err != nil {
+			if strings.Contains(s.must("list-clients", "-F", "#{client_tty}"), e.tty) {
 				fatalf("disconnecting %s: %v", e.name, err)
 			}
 		}
 	}
 }
 
-func revokeInvite(s server, id string, disconnect bool, reason string) {
+func revokeInvite(s host, id string, disconnect bool, reason string) {
 	unlock := lockShare(s)
 	defer unlock()
 	revokeInviteLocked(s, id, disconnect, reason)
 }
 
-func revokeInviteLocked(s server, id string, disconnect bool, reason string) {
+func revokeInviteLocked(s host, id string, disconnect bool, reason string) {
 	i, ok := loadInvite(s, id)
 	if !ok {
 		return
@@ -258,16 +271,16 @@ func revokeInviteLocked(s server, id string, disconnect bool, reason string) {
 	}
 }
 
-func stopAccess(s server, kind, reason string) {
+func stopAccess(s host, kind, reason string) {
 	for _, i := range invites(s) {
 		if kind == "all" || i.Kind == kind {
 			revokeInvite(s, i.ID, true, reason)
 		}
 	}
-	refreshStatus(s)
+	s.status()
 }
 
-func changeInvite(s server, id string, remaining *int, expiry *time.Duration) {
+func changeInvite(s host, id string, remaining *int, expiry *time.Duration) {
 	unlock := lockShare(s)
 	i, ok := loadInvite(s, id)
 	if !ok || i.State == "revoked" || i.State == "expired" || i.expired() || s.get("closing") != "" {
@@ -296,10 +309,10 @@ func changeInvite(s server, id string, remaining *int, expiry *time.Duration) {
 		}
 	}
 	unlock()
-	refreshStatus(s)
+	s.status()
 }
 
-func staysAway(s server) bool {
+func staysAway(s host) bool {
 	for _, i := range invites(s) {
 		if !i.Away || i.expired() {
 			continue
@@ -316,7 +329,7 @@ func staysAway(s server) bool {
 	return false
 }
 
-func pruneInvitesLocked(s server) bool {
+func pruneInvitesLocked(s host) bool {
 	changed := false
 	busy := map[string]bool{}
 	for id, identity := range s.opts("gate_") {
@@ -332,7 +345,7 @@ func pruneInvitesLocked(s server) bool {
 			continue
 		}
 		s.unset("gate_" + id)
-		s.must("wait-for", "-S", channel(id))
+		s.wake(id)
 		for _, prefix := range []string{"wait_", "bye_"} {
 			s.unset(prefix + id)
 		}
@@ -381,7 +394,7 @@ func pruneInvitesLocked(s server) bool {
 	return changed
 }
 
-func expireInvites(s server) {
+func expireInvites(s host) {
 	unlock := lockShare(s)
 	changed := false
 	for _, i := range invites(s) {
@@ -393,7 +406,7 @@ func expireInvites(s server) {
 	changed = pruneInvitesLocked(s) || changed
 	unlock()
 	if changed {
-		refreshStatus(s)
+		s.status()
 	}
 }
 

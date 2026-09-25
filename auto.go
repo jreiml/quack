@@ -13,13 +13,13 @@ import (
 
 const defaultExpiry = 24 * time.Hour
 
-func lockShare(s server) func() {
-	f, err := os.OpenFile(filepath.Join(os.TempDir(), "quack", s.name+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+func lockShare(s host) func() {
+	f, err := os.OpenFile(filepath.Join(os.TempDir(), "quack", s.hostName()+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		fatalf("%v", err)
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		fatalf("locking %s: %v", s.name, err)
+		fatalf("locking %s: %v", s.hostName(), err)
 	}
 	return func() { f.Close() }
 }
@@ -32,14 +32,14 @@ func clock(t time.Time) string {
 	return t.Format("Mon 15:04")
 }
 
-func expireLoop(s server, logger *log.Logger) {
+func expireLoop(s host, logger *log.Logger) {
 	hostSeen := false
 	for range time.Tick(5 * time.Second) {
 		if !s.alive() {
 			return
 		}
 		expireInvites(s)
-		if hostAttached(s) {
+		if s.attached() {
 			hostSeen = true
 			continue
 		}
@@ -52,7 +52,7 @@ func expireLoop(s server, logger *log.Logger) {
 		if s.get("invites_ready") == "" || ask && !hostSeen || !ask && (staysAway(s) || len(connections(s)) > 0) {
 			continue
 		}
-		c := exec.Command(quackBin(), "_expire", s.name)
+		c := exec.Command(quackBin(), "_expire", s.hostName())
 		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := c.Start(); err != nil {
 			logger.Printf("ending expired share: %v", err)

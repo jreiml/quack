@@ -45,7 +45,7 @@ func cleanName(raw string) string {
 }
 
 type entry struct {
-	s      server
+	s      host
 	hex    string
 	code   string
 	name   string
@@ -56,7 +56,7 @@ type entry struct {
 	state  string
 }
 
-func waiting(s server) []entry {
+func waiting(s host) []entry {
 	var out []entry
 	for hex, v := range s.opts("wait_") {
 		f := strings.SplitN(v, "|", 3)
@@ -69,7 +69,7 @@ func waiting(s server) []entry {
 	return out
 }
 
-func guests(s server) []entry {
+func guests(s host) []entry {
 	var out []entry
 	for id, v := range s.opts("guest_") {
 		f := strings.SplitN(v, "|", 4)
@@ -86,7 +86,7 @@ func guests(s server) []entry {
 	return out
 }
 
-func guestTTYs(s server) map[string]bool {
+func guestTTYs(s host) map[string]bool {
 	m := map[string]bool{}
 	for _, g := range guests(s) {
 		m[g.tty] = true
@@ -190,8 +190,11 @@ func cmdGate(args []string) {
 	if len(args) != 1 {
 		fatalf("usage: quack _gate <name>")
 	}
-	s := server{args[0]}
-	logger, _ := openLog(s.name)
+	h, ok := hostByName(args[0])
+	if !ok {
+		fatalf("no session named %s", args[0])
+	}
+	logger, _ := openLog(h.hostName())
 	pub := os.Getenv("TAILCAT_PEER_KEY")
 	if !strings.HasPrefix(pub, "nodekey:") {
 		logger.Fatalf("gate: missing TAILCAT_PEER_KEY")
@@ -207,10 +210,11 @@ func cmdGate(args []string) {
 				logger.Fatalf("pair process group: %v", err)
 			}
 		}
-		pairGate(s, pub, cleanName(name), inviteID)
+		pairGate(h, pub, cleanName(name), inviteID)
 		return
 	}
-	if command != "join-invite" {
+	s, ok := h.(server)
+	if !ok || command != "join-invite" {
 		logger.Fatalf("unsupported guest command")
 	}
 	sum := sha256.Sum256([]byte(pub + ":" + inviteID))
@@ -310,9 +314,9 @@ func cmdGate(args []string) {
 	leave(0)
 }
 
-func allEntries(list func(server) []entry) []entry {
+func allEntries(list func(host) []entry) []entry {
 	var out []entry
-	for _, s := range servers() {
+	for _, s := range hosts() {
 		out = append(out, list(s)...)
 	}
 	return out
@@ -321,7 +325,7 @@ func allEntries(list func(server) []entry) []entry {
 func describeEntries(es []entry) string {
 	var lines []string
 	for _, e := range es {
-		lines = append(lines, fmt.Sprintf("  %s  %s  (%s)", e.code, e.name, e.s.name))
+		lines = append(lines, fmt.Sprintf("  %s  %s  (%s)", e.code, e.name, e.s.hostName()))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -360,14 +364,14 @@ func admit(e entry) {
 func admitLocked(e entry) {
 	e.s.set("ok_"+e.hex, e.name)
 	e.s.unset("wait_" + e.hex)
-	e.s.must("wait-for", "-S", channel(e.hex))
+	e.s.wake(e.hex)
 }
 
 func decline(e entry) {
 	e.s.set("bye_"+e.hex, "The host declined.")
 	e.s.unset("wait_" + e.hex)
-	e.s.must("wait-for", "-S", channel(e.hex))
-	refreshStatus(e.s)
+	e.s.wake(e.hex)
+	e.s.status()
 }
 
 func sayBye(s server, hex, fallback string) {
@@ -394,7 +398,7 @@ func cmdAllow(args []string) {
 		fatalf("%v", err)
 	}
 	admit(e)
-	fmt.Fprintf(os.Stderr, "let %s into %s\n", e.name, e.s.name)
+	fmt.Fprintf(os.Stderr, "let %s into %s\n", e.name, e.s.hostName())
 }
 
 func cmdDecline(args []string) {
@@ -410,5 +414,5 @@ func cmdDecline(args []string) {
 		fatalf("%v", err)
 	}
 	decline(e)
-	fmt.Fprintf(os.Stderr, "turned %s away from %s\n", e.name, e.s.name)
+	fmt.Fprintf(os.Stderr, "turned %s away from %s\n", e.name, e.s.hostName())
 }

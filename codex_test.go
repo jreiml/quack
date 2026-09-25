@@ -286,7 +286,7 @@ func TestNetCodexHostWithoutMessages(t *testing.T) {
 	host := fakeInfo(t, root, "host")
 	defer s.run("kill-server")
 	guest := startFake(t, root, "guest")
-	quack(t, "share", "--pair", "--auto-approve", s.name)
+	quack(t, "invite", "new", "agent", "--auto-approve", "-n", s.name)
 	fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, s, "pair")})
 	eventually(t, "pair active", func() bool { return len(pairs(s)) == 1 && pairs(s)[0].state == "active" })
 	locks, err := filepath.Glob(filepath.Join(home, "thread-writer-locks", "*.lock"))
@@ -388,7 +388,7 @@ func TestNetCodexPair(t *testing.T) {
 					}
 				}
 			}()
-			quack(t, "share", "--pair", "--auto-approve", s.name)
+			quack(t, "invite", "new", "agent", "--auto-approve", "-n", s.name)
 			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, s, "pair")})
 			var hostName, guestName string
 			eventually(t, "pair ready", func() bool {

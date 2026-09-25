@@ -506,8 +506,8 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 	}
 }
 
-func pairGate(s server, pub, who, inviteID string) {
-	logger, file := openLog(s.name)
+func pairGate(s host, pub, who, inviteID string) {
+	logger, file := openLog(s.hostName())
 	defer file.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
@@ -534,7 +534,7 @@ func pairGate(s server, pub, who, inviteID string) {
 	case <-p.errors:
 		return
 	}
-	a, codex, err := hostAgent(s)
+	a, codex, err := s.agent()
 	if err != nil {
 		logger.Printf("%s's agent could not pair: %v", who, err)
 		if err := notify(fmt.Sprintf("%s's agent could not pair: %v", who, err)); err != nil {
@@ -573,7 +573,7 @@ func pairGate(s server, pub, who, inviteID string) {
 		for _, opt := range []string{pidOpt, active, "wait_" + id, "ok_" + id, "bye_" + id, "member_" + id} {
 			s.unset(opt)
 		}
-		refreshStatus(s)
+		s.status()
 	}()
 	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|waiting")
 	if err := requestAdmission(s, inviteID, "pair", id, peer.label(), code); err != nil {
@@ -583,7 +583,7 @@ func pairGate(s server, pub, who, inviteID string) {
 	admitted := s.get("ok_"+id) != ""
 	if !admitted {
 		logger.Printf("%s's agent (%s) waiting", who, code)
-		refreshStatus(s)
+		s.status()
 		if err := notify(fmt.Sprintf("%s's agent wants to pair (code %s). Ctrl-Q to answer.", who, code)); err != nil {
 			logger.Printf("notify: %v", err)
 		}
@@ -627,7 +627,7 @@ func pairGate(s server, pub, who, inviteID string) {
 		return
 	}
 	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|active")
-	refreshStatus(s)
+	s.status()
 	if err := p.send(pairFrame{Type: "ready", Version: pairProtocol, Identity: &identity}); err != nil {
 		logger.Printf("pair ready: %v", err)
 		return
@@ -658,7 +658,7 @@ func pairGate(s server, pub, who, inviteID string) {
 	pairNotice(b, who, reason)
 }
 
-func pairEndReason(s server, id, fallback string) string {
+func pairEndReason(s host, id, fallback string) string {
 	if reason := s.get("bye_" + id); reason != "" {
 		return reason
 	}
@@ -766,7 +766,7 @@ func cmdUnpair(args []string) {
 	}
 }
 
-func pairs(s server) []entry {
+func pairs(s host) []entry {
 	var out []entry
 	for id, v := range s.opts("pair_") {
 		f := strings.SplitN(v, "|", 4)

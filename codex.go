@@ -271,7 +271,7 @@ func callerAgent() (claudeEndpoint, *codexEndpoint, error) {
 	return a, nil, fmt.Errorf("run this inside Claude or Codex using its shell tool: %w", err)
 }
 
-func hostAgent(s server) (claudeEndpoint, *codexEndpoint, error) {
+func (s server) agent() (claudeEndpoint, *codexEndpoint, error) {
 	panes, err := s.run("list-panes", "-t", "=main", "-F", "#{pane_pid}")
 	if err != nil {
 		return claudeEndpoint{}, nil, err
@@ -323,16 +323,7 @@ func agentSessionIdentity(a claudeEndpoint, c *codexEndpoint, owner string) (age
 	return sessionIdentity(a, owner)
 }
 
-func (r *pairRecord) alive() error {
-	if r.Codex != nil {
-		return r.Codex.alive()
-	}
-	c, err := r.Claude.connect()
-	if err != nil {
-		return fmt.Errorf("%w: %w", errAgentGone, err)
-	}
-	return c.Close()
-}
+func (r *pairRecord) alive() error { return endpointAlive(r.Claude, r.Codex) }
 
 func (r pairRecord) send(name, text string) error {
 	if r.Codex != nil {

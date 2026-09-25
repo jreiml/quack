@@ -122,7 +122,7 @@ func TestNetInviteIsolation(t *testing.T) {
 	defer s.run("kill-server")
 	host := fakeInfo(t, root, "host")
 	guest := startFake(t, root, "guest")
-	quack(t, "share", "--auto-approve", "--limit", "1", s.name)
+	quack(t, "invite", "new", "terminal", "--auto-approve", "--limit", "1", "-n", s.name)
 	terminalLink := inviteLinkForTest(t, s, "join")
 	g := guestTerm{t, filepath.Join(os.Getenv("TMUX_TMPDIR"), "invite-isolation")}
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
@@ -248,7 +248,7 @@ func TestMenuReturnsKeys(t *testing.T) {
 	}
 }
 
-func TestCloseAndInviteCleanup(t *testing.T) {
+func TestInviteSetAndCleanup(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := server{quack(t, "new", "-n", "t-invite-cleanup", "--", "sleep", "300")}
 	defer s.run("kill-server")
@@ -263,18 +263,18 @@ func TestCloseAndInviteCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	open := createInvite(s, "pair", 0, time.Hour)
-	quack(t, "close", s.name)
+	quack(t, "invite", "set", open.ID[:6], "--ask")
 	consumed, _ := loadInvite(s, i.ID)
 	changed, _ := loadInvite(s, open.ID)
 	if consumed.State != "consumed" || consumed.Admission != "limited" || consumed.Remaining != 0 {
-		t.Fatal("close reopened consumed invite", consumed)
+		t.Fatal("admission did not consume the invite", consumed)
 	}
 	quack(t, "_expire", s.name)
 	if !s.shared() {
 		t.Fatal("idle cleanup stopped an open ask-first invite")
 	}
 	if changed.Admission != "ask" {
-		t.Fatal("close left automatic admission", changed)
+		t.Fatal("set --ask left automatic admission", changed)
 	}
 	if openInviteCount(s) != 1 {
 		t.Fatal("count includes consumed invites")
@@ -314,7 +314,7 @@ func TestNetIdleInviteExpiry(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := server{quack(t, "new", "-n", "t-idle-expiry", "--", "sleep", "300")}
 	defer s.run("kill-server")
-	quack(t, "share", "--auto-approve", "--expires", "2s", s.name)
+	quack(t, "invite", "new", "terminal", "--auto-approve", "--expires", "2s", "-n", s.name)
 	eventually(t, "idle share stops after last invite expires", func() bool { return !s.shared() && s.get("addr") == "" })
 	if !s.alive() {
 		t.Fatal("expiry killed underlying session")
@@ -364,13 +364,15 @@ func TestDetachedAskFirst(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	s := server{quack(t, "new", "-n", "t-detached-ask", "--", "sleep", "300")}
 	defer s.run("kill-server")
-	for _, args := range [][]string{{"share", s.name}, {"close", s.name}} {
+	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
+	auto := createInvite(s, "join", 0, 0)
+	for _, args := range [][]string{{"invite", "new", "terminal", "-n", s.name}, {"invite", "set", auto.ID, "--ask"}} {
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "attached host") {
 			t.Fatalf("%v: %v %s", args, err, out)
 		}
 	}
-	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
+	revokeInvite(s, auto.ID, true, "revoked")
 	createInvite(s, "join", -1, 0)
 	quack(t, "_expire", s.name)
 	if s.shared() {

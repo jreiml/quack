@@ -35,6 +35,9 @@ func pickWord(words []string) string {
 func newName() string {
 	for {
 		name := pickWord(adjectives) + "-" + pickWord(animals)
+		if _, ok := hostByName(name); ok {
+			continue
+		}
 		if _, err := os.Stat(filepath.Join(socketDir(), socketPrefix+name)); os.IsNotExist(err) {
 			return name
 		}
@@ -98,7 +101,7 @@ func cmdAgent(agent string, args []string) {
 
 func cmdNew(args []string) {
 	name := ""
-	share, detach := false, false
+	detach := false
 	for len(args) > 0 && args[0] != "--" {
 		switch args[0] {
 		case "-n", "--name":
@@ -107,9 +110,6 @@ func cmdNew(args []string) {
 			}
 			name = args[1]
 			args = args[2:]
-		case "-s", "--share":
-			share = true
-			args = args[1:]
 		case "-d", "--detach":
 			detach = true
 			args = args[1:]
@@ -146,10 +146,10 @@ func cmdNew(args []string) {
 	if name == "" {
 		name = newName()
 	}
-	s := server{name}
-	if s.alive() {
+	if _, ok := hostByName(name); ok {
 		fatalf("session %s already exists", name)
 	}
+	s := server{name}
 	dir, err := os.Getwd()
 	if err != nil {
 		fatalf("%v", err)
@@ -164,10 +164,6 @@ func cmdNew(args []string) {
 	s.must("set-option", "-w", "-t", "=main:", "window-size", "manual")
 	s.set("cmd", strings.Join(args, " "))
 	s.set("dir", dir)
-	if share {
-		startShare(s)
-		createInvite(s, "join", -1, 0)
-	}
 	if detach {
 		fmt.Println(name)
 		return
@@ -250,7 +246,7 @@ func cmdStop(args []string) {
 }
 
 type info struct {
-	s       server
+	s       host
 	created time.Time
 	cmd     string
 	dir     string
@@ -260,15 +256,27 @@ type info struct {
 	waiting int
 	shared  bool
 	auto    bool
+	agent   bool
 }
 
-func describe(s server) info {
-	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir"), shared: s.shared()}
-	for _, v := range invites(s) {
+func (i *info) describeAccess() {
+	i.shared = i.s.shared()
+	for _, v := range invites(i.s) {
 		if v.State == "open" && v.Admission != "ask" && !v.expired() {
 			i.auto = true
 		}
 	}
+	for _, p := range pairs(i.s) {
+		if p.state == "active" {
+			i.pairs++
+		}
+	}
+	i.waiting = len(i.s.opts("wait_"))
+}
+
+func describe(s server) info {
+	i := info{s: s, cmd: s.get("cmd"), dir: s.get("dir")}
+	i.describeAccess()
 	if ts, err := strconv.ParseInt(s.must("display-message", "-p", "-t", "=main:", "#{session_created}"), 10, 64); err == nil {
 		i.created = time.Unix(ts, 0)
 	}
@@ -280,12 +288,23 @@ func describe(s server) info {
 			i.hosts++
 		}
 	}
-	for _, p := range pairs(s) {
-		if p.state == "active" {
-			i.pairs++
-		}
+	return i
+}
+
+func describeAgent(a agentHost) info {
+	p, err := a.pinned()
+	if err != nil {
+		fatalf("%v", err)
 	}
-	i.waiting = len(s.opts("wait_"))
+	pid, _ := p.pid()
+	i := info{s: a, cmd: fmt.Sprintf("claude (pid %d)", pid), dir: p.Cwd, agent: true}
+	if p.Codex != nil {
+		i.cmd = fmt.Sprintf("codex (pid %d)", pid)
+	}
+	if ts, err := strconv.ParseInt(a.get("created"), 10, 64); err == nil {
+		i.created = time.Unix(ts, 0)
+	}
+	i.describeAccess()
 	return i
 }
 
@@ -293,6 +312,15 @@ func sessions() []info {
 	var out []info
 	for _, s := range servers() {
 		out = append(out, describe(s))
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].created.After(out[b].created) })
+	return out
+}
+
+func hostInfos() []info {
+	out := sessions()
+	for _, a := range agentHosts() {
+		out = append(out, describeAgent(a))
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].created.After(out[b].created) })
 	return out
@@ -319,7 +347,9 @@ func age(t time.Time) string {
 
 func (i info) state() string {
 	var parts []string
-	if i.hosts > 0 {
+	if i.agent {
+		parts = append(parts, "agent host")
+	} else if i.hosts > 0 {
 		parts = append(parts, "attached")
 	} else {
 		parts = append(parts, "detached")
@@ -353,13 +383,13 @@ func printSessions(list []info) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tCMD\tDIR\tAGE\tSTATE")
 	for _, i := range list {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", i.s.name, i.cmd, tildify(i.dir), age(i.created), i.state())
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", i.s.hostName(), i.cmd, tildify(i.dir), age(i.created), i.state())
 	}
 	w.Flush()
 }
 
 func cmdLs(args []string) {
-	list := sessions()
+	list := hostInfos()
 	if len(list) == 0 {
 		fmt.Fprintln(os.Stderr, "no sessions; start one with: quack new")
 		return
@@ -368,22 +398,33 @@ func cmdLs(args []string) {
 }
 
 func target(args []string, strict bool) server {
+	h := pickTarget(args, strict, sessions)
+	s, ok := h.(server)
+	if !ok {
+		fatalf("%s is an agent, not a terminal session", h.hostName())
+	}
+	return s
+}
+
+func targetHost(args []string) host { return pickTarget(args, true, hostInfos) }
+
+func pickTarget(args []string, strict bool, candidates func() []info) host {
 	if len(args) > 1 {
 		fatalf("too many arguments")
 	}
 	if len(args) == 1 {
-		s := server{args[0]}
-		if !s.alive() {
+		h, ok := hostByName(args[0])
+		if !ok {
 			fatalf("no session named %s (see quack ls)", args[0])
 		}
-		return s
+		return h
 	}
 	if name := os.Getenv("QUACK_SESSION"); name != "" {
 		if s := (server{name}); s.alive() {
 			return s
 		}
 	}
-	list := sessions()
+	list := candidates()
 	switch {
 	case len(list) == 0:
 		fatalf("no sessions; start one with: quack new")
@@ -397,9 +438,9 @@ func target(args []string, strict bool) server {
 	return pick(list)
 }
 
-func pick(list []info) server {
+func pick(list []info) host {
 	for n, i := range list {
-		fmt.Fprintf(os.Stderr, "%2d) %-18s %-10s %s  %s\n", n+1, i.s.name, i.cmd, tildify(i.dir), i.state())
+		fmt.Fprintf(os.Stderr, "%2d) %-18s %-10s %s  %s\n", n+1, i.s.hostName(), i.cmd, tildify(i.dir), i.state())
 	}
 	fmt.Fprint(os.Stderr, "which session? ")
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')

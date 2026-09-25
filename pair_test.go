@@ -78,10 +78,11 @@ type fakeClaudeInfo struct {
 }
 
 type fakeClaudeCommand struct {
-	Action  string `json:"action"`
-	Address string `json:"address,omitempty"`
-	Text    string `json:"text,omitempty"`
-	ID      string `json:"id,omitempty"`
+	Action  string   `json:"action"`
+	Address string   `json:"address,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	ID      string   `json:"id,omitempty"`
+	Args    []string `json:"args,omitempty"`
 }
 
 type fakeClaudeResult struct {
@@ -183,10 +184,13 @@ func fakeClaude() {
 		}
 		result := fakeClaudeResult{}
 		switch command.Action {
-		case "pair", "unpair":
+		case "pair", "unpair", "quack":
 			args := []string{command.Action}
 			if command.Address != "" {
 				args = append(args, command.Address)
+			}
+			if command.Action == "quack" {
+				args = command.Args
 			}
 			cmd := exec.Command(os.Getenv("QUACK_PAIR_BIN"), args...)
 			cmd.Env = append(os.Environ(), "CLAUDE_CODE_MESSAGING_SOCKET="+path)
@@ -385,7 +389,9 @@ func startFake(t *testing.T, root, label string) fakeClaudeInfo {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	done := make(chan struct{})
+	go func() { cmd.Wait(); close(done) }()
+	t.Cleanup(func() { cmd.Process.Kill(); <-done })
 	return fakeInfo(t, root, label)
 }
 
@@ -516,7 +522,7 @@ func TestNetPair(t *testing.T) {
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 	g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 	eventually(t, "host attached", func() bool { return hostAttached(s) })
-	quack(t, "share", "--pair", s.name)
+	quack(t, "invite", "new", "agent", "-n", s.name)
 	addr := inviteLinkForTest(t, s, "pair")
 	started := time.Now()
 	result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
@@ -560,7 +566,7 @@ func TestNetPair(t *testing.T) {
 	for _, path := range []string{strings.TrimPrefix(hostInbox, "uds:"), strings.TrimPrefix(guestInbox, "uds:")} {
 		eventually(t, "socket removed", func() bool { _, err := os.Lstat(path); return os.IsNotExist(err) })
 	}
-	quack(t, "share", "--pair", "--auto-approve", "--limit", "1", s.name)
+	quack(t, "invite", "new", "agent", "--auto-approve", "--limit", "1", "-n", s.name)
 	addr = inviteLinkForTest(t, s, "pair")
 	result = fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "auto pair", func() bool { return len(pairs(s)) == 1 && pairs(s)[0].state == "active" })
@@ -569,7 +575,7 @@ func TestNetPair(t *testing.T) {
 	if consumed.State != "consumed" {
 		t.Fatal("pair did not consume one-time spot")
 	}
-	quack(t, "share", "--pair", s.name)
+	quack(t, "invite", "new", "agent", "-n", s.name)
 	addr = inviteLinkForTest(t, s, "pair")
 	fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "second pair waits", func() bool { return len(waiting(s)) == 1 })
@@ -608,7 +614,7 @@ func TestNetPair(t *testing.T) {
 	fakeCall(t, other, fakeClaudeCommand{Action: "send", Address: otherRecord.Name, Text: "other-session-still-paired"})
 	eventually(t, "other Claude remains paired", func() bool { return hasFakeMessage(t, host, "other-session-still-paired") })
 
-	quack(t, "unshare", s.name)
+	quack(t, "invite", "revoke", "--all", "-n", s.name)
 	eventually(t, "unshare cleanup", func() bool { return len(pairs(s)) == 0 && hasFakeMessage(t, guest, "The host stopped sharing.") })
 	eventually(t, "all pair records removed", func() bool {
 		paths, err := filepath.Glob(filepath.Join(claudeSessions(), "*.json"))
@@ -651,15 +657,16 @@ func TestNetPairEndings(t *testing.T) {
 			defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 			g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 			eventually(t, "host attached", func() bool { return hostAttached(s) })
-			quack(t, "share", "--pair", "--auto-approve", "--expires", "8s", s.name)
-			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, s, "pair")})
+			quack(t, "invite", "new", "agent", "--auto-approve", "--expires", "8s", "-n", s.name)
+			link := inviteLinkForTest(t, s, "pair")
+			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: link})
 			guestInbox := fakeInbox(t, guest, result.Output)
 			hostInbox := fakeInbox(t, host, "")
 			survivor := guest
 			want := ""
 			switch ending {
 			case "detach":
-				quack(t, "close", s.name)
+				quack(t, "invite", "set", link[strings.LastIndex(link, "/")+1:], "--ask")
 				quack(t, "detach", s.name)
 				want = "The host left, so sharing stopped."
 			case "expiry":
