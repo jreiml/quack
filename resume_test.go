@@ -531,3 +531,54 @@ func TestPairRedialBackoffPersists(t *testing.T) {
 		}
 	}
 }
+
+func TestPairSweepKeepsLiveSockets(t *testing.T) {
+	isolateTemp(t)
+	if err := os.MkdirAll(pairSocketDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	live := pairSocketPath(os.Getpid())
+	ln, err := net.Listen("unix", live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	sweepPairSockets()
+	if _, err := os.Lstat(live); err != nil {
+		t.Fatalf("swept a live process's socket: %v", err)
+	}
+}
+
+func TestPairGateHelloTimeoutIsRetryable(t *testing.T) {
+	fakeSetup(t)
+	s := server{quack(t, "new", "-n", "t-pair-hello-timeout", "--", "sleep", "300")}
+	defer s.run("kill-server")
+	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
+	i := createInvite(s, "pair", 0, 0)
+	key := "nodekey:" + strings.Repeat("56", 32)
+	c := exec.Command(bin, "_gate", s.name)
+	c.Env = append(os.Environ(), "TAILCAT_PEER_KEY="+key, "SSH_ORIGINAL_COMMAND=pair-invite "+i.ID+" Ada Lovelace", "TAILCAT_REMOTE_ADDR=[::1]:5656")
+	in, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := c.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
+	w := newPairWire(out, in, in)
+	defer w.close()
+	select {
+	case f := <-w.in:
+		t.Fatalf("gate answered a missing hello with %+v", f)
+	case <-w.errors:
+	case <-time.After(20 * time.Second):
+		t.Fatal("gate kept the connection open")
+	}
+}

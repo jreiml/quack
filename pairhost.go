@@ -38,6 +38,10 @@ func sweepPairSockets() {
 		fatalf("%v", err)
 	}
 	for _, path := range paths {
+		pid, err := strconv.Atoi(strings.TrimSuffix(filepath.Base(path), ".sock"))
+		if err != nil || !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			continue
+		}
 		c, err := net.Dial("unix", path)
 		if err == nil {
 			c.Close()
@@ -110,7 +114,7 @@ func pairRelay(s host, pub, who, inviteID string, logger *log.Logger) {
 	case <-hup:
 		return
 	case <-time.After(10 * time.Second):
-		pairRefuse("Pair handshake timed out.")
+		logger.Printf("pair relay: no hello within 10s")
 		return
 	}
 	var hello pairFrame
