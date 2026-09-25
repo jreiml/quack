@@ -486,7 +486,7 @@ func TestCodexInboxRoutingAndLifetime(t *testing.T) {
 			b.close()
 		}
 	}()
-	peer := agentIdentity{strings.Repeat("a", 64), "brave-otter-482731", "Ada Lovelace"}
+	peer := agentIdentity{strings.Repeat("a", 64), "brave-otter-482731", "Ada Lovelace", "Codex"}
 	if err := b.setPeer(peer); err != nil {
 		t.Fatal(err)
 	}

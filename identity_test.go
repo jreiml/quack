@@ -51,7 +51,7 @@ func TestPeerNaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.close()
-	peer := agentIdentity{strings.Repeat("a", 64), "brave-otter-482731", "Ada Lovelace"}
+	peer := agentIdentity{strings.Repeat("a", 64), "brave-otter-482731", "Ada Lovelace", "Codex"}
 	if err := b.setPeer(peer); err != nil {
 		t.Fatal(err)
 	}
@@ -59,8 +59,11 @@ func TestPeerNaming(t *testing.T) {
 		t.Fatalf("name = %s", b.record.Name)
 	}
 	prompt := pairPrompt(b)
-	if !strings.Contains(prompt, `SendMessage to "brave-otter-482731"`) || strings.Contains(prompt, "uds:") || strings.Contains(prompt, "bypass") {
+	if !strings.Contains(prompt, `SendMessage to "brave-otter-482731"`) || !strings.Contains(prompt, "a Codex session belonging to Ada Lovelace") || strings.Contains(prompt, "uds:") || strings.Contains(prompt, "bypass") {
 		t.Fatal(prompt)
+	}
+	if unknown := (agentIdentity{peer.ID, peer.Name, peer.Owner, "Gemini"}); unknown.valid() {
+		t.Fatal("accepted an unknown agent type")
 	}
 	pairNotice(b, peer.Owner, prompt)
 	if err := fake.Claude.send(b.record.Socket, peer.label(), "Hello"); err != nil {
@@ -110,7 +113,7 @@ func TestIdentityNameValidation(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"brave-otter", "brave-otter-12345", "brave-otter-abcdef", `evil"name-123456`} {
-		peer := agentIdentity{strings.Repeat("a", 64), name, "Ada Lovelace"}
+		peer := agentIdentity{strings.Repeat("a", 64), name, "Ada Lovelace", "Codex"}
 		if peer.valid() {
 			t.Fatalf("accepted invalid identity %q", name)
 		}

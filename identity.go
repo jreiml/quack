@@ -17,13 +17,14 @@ type agentIdentity struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Owner string `json:"owner"`
+	Agent string `json:"agent,omitempty"`
 }
 
 var agentNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}-[0-9]{6}$`)
 
 func (a agentIdentity) valid() bool {
 	id, err := hex.DecodeString(a.ID)
-	return err == nil && len(id) == 32 && agentNamePattern.MatchString(a.Name) && a.Owner != "" && cleanName(a.Owner) == a.Owner
+	return err == nil && len(id) == 32 && agentNamePattern.MatchString(a.Name) && a.Owner != "" && cleanName(a.Owner) == a.Owner && (a.Agent == "" || a.Agent == "Claude Code" || a.Agent == "Codex")
 }
 
 func (a agentIdentity) label() string { return a.Name + " (" + a.Owner + ")" }
@@ -49,7 +50,7 @@ func sessionIdentity(a claudeEndpoint, owner string) (agentIdentity, error) {
 	if err != nil {
 		return agentIdentity{}, err
 	}
-	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner)}, nil
+	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner), "Claude Code"}, nil
 }
 
 func sessionBase(pid int) (string, error) {

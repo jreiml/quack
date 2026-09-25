@@ -705,7 +705,7 @@ func TestPairDeclineGate(t *testing.T) {
 	defer c.Process.Kill()
 	p := newPairWire(out, in)
 	defer close(p.done)
-	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &agentIdentity{strings.Repeat("a", 64), "brave-otter-123456", "Ada Lovelace"}}); err != nil {
+	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &agentIdentity{strings.Repeat("a", 64), "brave-otter-123456", "Ada Lovelace", "Codex"}}); err != nil {
 		t.Fatal(err)
 	}
 	select {

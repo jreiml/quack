@@ -108,7 +108,11 @@ func pairPrompt(b *pairInbox) string {
 	if b.record.Codex != nil {
 		instruction = fmt.Sprintf("Use quack send %s --message <text> through your shell tool", b.record.Name)
 	}
-	return fmt.Sprintf("You can collaborate with %s, an agent session belonging to %s. Your humans are working together. Continue your current task. %s when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, instruction, b.record.Name)
+	kind := "an agent"
+	if peer.Agent != "" {
+		kind = "a " + peer.Agent
+	}
+	return fmt.Sprintf("You can collaborate with %s, %s session belonging to %s. Your humans are working together. Continue your current task. %s when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, kind, peer.Owner, instruction, b.record.Name)
 }
 
 func pairNotice(b *pairInbox, peer, text string) error {

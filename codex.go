@@ -256,7 +256,7 @@ func (a codexEndpoint) identity(owner string) (agentIdentity, error) {
 	if err != nil {
 		return agentIdentity{}, err
 	}
-	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner)}, nil
+	return agentIdentity{hex.EncodeToString(sum[:]), identityName(sum, base), cleanName(owner), "Codex"}, nil
 }
 
 func callerAgent() (claudeEndpoint, *codexEndpoint, error) {
