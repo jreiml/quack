@@ -90,7 +90,7 @@ func pairRelay(s host, pub, who, inviteID string, logger *log.Logger) {
 			s.unset(pidOpt)
 		}
 	}()
-	in := bufio.NewReaderSize(os.Stdin, 2*pairMessageLimit+4096)
+	in := bufio.NewReaderSize(os.Stdin, pairFrameLimit)
 	lines := make(chan []byte, 1)
 	go func() {
 		line, err := in.ReadSlice('\n')
@@ -399,7 +399,7 @@ func (p *pairHost) run(ctx context.Context, conns chan pairConn) {
 				reason = pairEndReason(s, p.id, "The host declined.")
 			} else if err := b.record.alive(); errors.Is(err, errAgentGone) {
 				reason = "The host's agent exited."
-			} else if wire == nil && time.Since(offline) > time.Minute {
+			} else if wire == nil && time.Since(offline) > pairOfflineLimit() {
 				reason = "The peer stopped waiting."
 			}
 		}
@@ -429,7 +429,7 @@ func (p *pairHost) run(ctx context.Context, conns chan pairConn) {
 	if wire != nil {
 		link.connect(pairConn{wire, hello})
 	} else {
-		link.offline = time.Now()
+		link.offline = offline
 		link.state("offline")
 	}
 	p.logger.Printf("%s's agent (%s) paired", p.who, p.code)

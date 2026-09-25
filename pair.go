@@ -30,6 +30,7 @@ import (
 const (
 	pairProtocol    = 3
 	pairOutboxLimit = 30
+	pairFrameLimit  = 6*pairMessageLimit + 4096
 )
 
 func pairOfflineLimit() time.Duration {
@@ -74,7 +75,7 @@ func newPairWire(r io.Reader, w io.Writer, closer io.Closer) *pairWire {
 
 func (p *pairWire) read(r io.Reader) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 4096), 2*pairMessageLimit+4096)
+	scanner.Buffer(make([]byte, 4096), pairFrameLimit)
 	for scanner.Scan() {
 		var f pairFrame
 		if err := json.Unmarshal(scanner.Bytes(), &f); err != nil {
@@ -558,6 +559,7 @@ func cmdPairWorker(args []string) {
 }
 
 type pairDialer struct {
+	delay  time.Duration
 	cfg    pairConfig
 	cl     *tailcat.Client
 	logger *log.Logger
@@ -631,12 +633,12 @@ func pairSession(client *ssh.Client, cfg pairConfig, resume bool) (*pairWire, er
 }
 
 func (d *pairDialer) redial(ctx context.Context, b *pairInbox, resume bool, since time.Time) (*pairWire, error) {
-	delay := time.Second
 	for {
+		d.delay = min(max(2*d.delay, time.Second), 30*time.Second)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(delay):
+		case <-time.After(d.delay):
 		}
 		if err := b.record.alive(); errors.Is(err, errAgentGone) {
 			return nil, err
@@ -649,7 +651,6 @@ func (d *pairDialer) redial(ctx context.Context, b *pairInbox, resume bool, sinc
 			return w, nil
 		}
 		d.logger.Printf("pair redial: %v", err)
-		delay = min(2*delay, 30*time.Second)
 	}
 }
 
@@ -709,7 +710,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 				return fail(err)
 			}
 		case f := <-w.in:
-			lostAt = time.Time{}
+			lostAt, d.delay = time.Time{}, 0
 			switch f.Type {
 			case "waiting":
 			case "bye":
@@ -782,6 +783,9 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 					w.close()
 					b.logger.Printf("pair resume: %v", err)
 					continue
+				}
+				if f.Type == "ready" {
+					d.delay = 0
 				}
 				select {
 				case conns <- pairConn{w, f}:

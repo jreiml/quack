@@ -464,3 +464,70 @@ func TestPairInboundSlack(t *testing.T) {
 		}
 	}
 }
+
+func TestPairWireEscapedMessage(t *testing.T) {
+	a, z := net.Pipe()
+	local, remote := newPairWire(a, a, a), newPairWire(z, z, z)
+	defer local.close()
+	defer remote.close()
+	text := strings.Repeat("<&>", pairMessageLimit/3)
+	local.send(pairFrame{Type: "message", Seq: 1, Text: text})
+	select {
+	case f := <-remote.in:
+		if f.Text != text {
+			t.Fatal("message changed in transit")
+		}
+	case err := <-remote.errors:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("message not delivered")
+	}
+}
+
+func TestPairWaitingOffline(t *testing.T) {
+	fakeSetup(t)
+	s := server{quack(t, "new", "-n", "t-pair-wait-offline", "--", "env", "QUACK_PAIR_HELPER=1", "QUACK_PAIR_LABEL=host", os.Args[0])}
+	defer s.run("kill-server")
+	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
+	i := createInvite(s, "pair", -1, 0)
+	me := agentIdentity{strings.Repeat("c", 64), "keen-lynx-123456", "Ada Lovelace", "Codex"}
+	hello := pairFrame{Type: "hello", Version: pairProtocol, Identity: &me}
+	limit := "QUACK_PAIR_OFFLINE_LIMIT=6s"
+
+	unapproved := "nodekey:" + strings.Repeat("12", 32)
+	g := startTestGate(t, s, unapproved, i.ID, hello, limit)
+	g.expect(t, "waiting")
+	g.kill(t)
+	eventually(t, "unapproved pairing ends at the offline limit", func() bool {
+		return pairTombstone(s, pairID(unapproved)) == "The peer stopped waiting."
+	})
+
+	approved := "nodekey:" + strings.Repeat("34", 32)
+	g = startTestGate(t, s, approved, i.ID, hello, limit)
+	g.expect(t, "waiting")
+	g.kill(t)
+	dropped := time.Now()
+	time.Sleep(3 * time.Second)
+	quack(t, "allow", codeFor(approved))
+	eventually(t, "approved pairing ends", func() bool { return pairTombstone(s, pairID(approved)) != "" })
+	if reason := pairTombstone(s, pairID(approved)); reason != "The connection to the peer was lost." {
+		t.Fatalf("ended with %q", reason)
+	}
+	if elapsed := time.Since(dropped); elapsed > 9*time.Second {
+		t.Fatalf("approval restarted the outage: ended after %v", elapsed)
+	}
+}
+
+func TestPairRedialBackoffPersists(t *testing.T) {
+	d := &pairDialer{logger: log.New(io.Discard, "", 0)}
+	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		if _, err := d.redial(ctx, nil, false, time.Now()); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		cancel()
+		if d.delay != want {
+			t.Fatalf("delay = %v, want %v", d.delay, want)
+		}
+	}
+}
