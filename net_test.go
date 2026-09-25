@@ -83,8 +83,12 @@ func TestNetShareJoin(t *testing.T) {
 	g.join(addr)
 	eventually(t, "known guest to attach without approval", func() bool { return attached(s) })
 
-	g.tmux("send-keys", "-t", "g", "C-q", "q")
-	eventually(t, "guest to leave", func() bool { return len(guests(s)) == 0 })
+	g.tmux("send-keys", "-t", "g", "sleep 99", "C-c")
+	eventually(t, "Ctrl-C to leave", func() bool { return len(guests(s)) == 0 && strings.Contains(g.screen(), "left (Ctrl-C)") })
+	if pane := s.must("capture-pane", "-p", "-t", "=main:"); !strings.Contains(pane, "sleep 99") || strings.Contains(pane, "^C") {
+		t.Errorf("guest's Ctrl-C reached the session:\n%s", pane)
+	}
+	s.must("send-keys", "-t", "=main:", "C-u")
 
 	newKey := func() {
 		if err := os.RemoveAll(filepath.Join(home, ".config", "quack", "keys")); err != nil {

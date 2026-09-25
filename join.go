@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -208,7 +209,11 @@ func cmdJoin(args []string) {
 			}
 		}
 	}()
-	go forwardStdin(stdin)
+	var left atomic.Bool
+	go forwardStdin(stdin, func() {
+		left.Store(true)
+		client.Close()
+	})
 	go keepalive(client, "\r\nthe host stopped responding\r\n")
 
 	if err := sess.Start("join-invite " + inviteID + " " + displayName()); err != nil {
@@ -221,6 +226,10 @@ func cmdJoin(args []string) {
 	}
 	os.Stdout.WriteString(terminalReset)
 	term.Restore(fd, old)
+	if left.Load() {
+		fmt.Fprintln(os.Stderr, "\r\nleft (Ctrl-C)")
+		return
+	}
 	if exit, ok := err.(*ssh.ExitError); ok && exit.ExitStatus() != 0 {
 		os.Exit(exit.ExitStatus())
 	}
@@ -268,8 +277,6 @@ const (
 	keyRelease
 	keyNoise
 )
-
-const cancelEvery = 3 * time.Second
 
 func classify(code, mods, event int) keyKind {
 	if event == 3 {
@@ -345,41 +352,37 @@ func nextKey(b []byte) (keyKind, int) {
 	return keyOther, end + 1
 }
 
-type inputFilter struct {
-	lastCancel time.Time
-	now        func() time.Time
-}
-
-func (f *inputFilter) feed(b []byte) []byte {
+func filterInput(b []byte) ([]byte, bool) {
 	out := make([]byte, 0, len(b))
 	for len(b) > 0 {
 		k, size := nextKey(b)
 		raw := b[:size]
 		b = b[size:]
 		switch k {
-		case keyCtrlD, keyRelease:
 		case keyCtrlC:
-			if f.now().Sub(f.lastCancel) >= cancelEvery {
-				f.lastCancel = f.now()
-				out = append(out, raw...)
-			}
+			return out, true
+		case keyCtrlD, keyRelease:
 		default:
 			out = append(out, raw...)
 		}
 	}
-	return out
+	return out, false
 }
 
-func forwardStdin(w io.WriteCloser) {
+func forwardStdin(w io.WriteCloser, leave func()) {
 	buf := make([]byte, 4096)
-	f := &inputFilter{now: time.Now}
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			w.Close()
 			return
 		}
-		if _, err := w.Write(f.feed(buf[:n])); err != nil {
+		out, left := filterInput(buf[:n])
+		if _, err := w.Write(out); err != nil {
+			return
+		}
+		if left {
+			leave()
 			return
 		}
 	}

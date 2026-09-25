@@ -89,30 +89,25 @@ func TestConnID(t *testing.T) {
 }
 
 func TestInputFilter(t *testing.T) {
-	clock := time.Unix(1000, 0)
-	f := &inputFilter{now: func() time.Time { return clock }}
-	step := func(in string, want string) {
+	step := func(in, want string, leave bool) {
 		t.Helper()
-		if out := f.feed([]byte(in)); string(out) != want {
-			t.Errorf("feed(%q) = %q; want %q", in, out, want)
+		if out, left := filterInput([]byte(in)); string(out) != want || left != leave {
+			t.Errorf("filterInput(%q) = %q, %v; want %q, %v", in, out, left, want, leave)
 		}
 	}
-	step("hello", "hello")
-	step("\x03", "\x03")
-	step("\x03", "")
-	step("\x1b[99;5u", "")
-	step("\x1b[27;5;99~", "")
-	clock = clock.Add(4 * time.Second)
-	step("\x1b[99;5u", "\x1b[99;5u")
-	step("\x04", "")
-	step("\x1b[100;5u", "")
-	step("\x1b[99;5:3u", "")
-	step("\x1b[99;6u", "\x1b[99;6u")
-	step("\x11q", "\x11q")
-	step("\x1b[113;5u", "\x1b[113;5u")
-	step("\x1b[A", "\x1b[A")
-	step("\x1b[57442;5u", "\x1b[57442;5u")
-	step("\x1b[97;1:3u", "\x1b[97;1:3u")
+	step("hello", "hello", false)
+	step("ab\x03cd", "ab", true)
+	step("\x1b[99;5u", "", true)
+	step("\x1b[27;5;99~", "", true)
+	step("\x04", "", false)
+	step("\x1b[100;5u", "", false)
+	step("\x1b[99;5:3u", "", false)
+	step("\x1b[99;6u", "\x1b[99;6u", false)
+	step("\x11q", "\x11q", false)
+	step("\x1b[113;5u", "\x1b[113;5u", false)
+	step("\x1b[A", "\x1b[A", false)
+	step("\x1b[57442;5u", "\x1b[57442;5u", false)
+	step("\x1b[97;1:3u", "\x1b[97;1:3u", false)
 }
 
 var bin string

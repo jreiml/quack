@@ -84,9 +84,9 @@ nothing usable is left and you're detached, sharing stops.
 
 ### Terminal guests
 
-Guests can type and can only leave, not end the session. At most one Ctrl-C
-every 3s reaches the session, and Ctrl-D doesn't. The window uses the host's
-terminal size. Admitted guests reconnect with the same invite without asking
+Guests can type and can only leave, not end the session. Ctrl-C leaves instead
+of reaching the session, since one Ctrl-C quits an idle Codex, and Ctrl-D is
+dropped. The window uses the host's terminal size. Admitted guests reconnect with the same invite without asking
 again.
 
 | Event | Session | Sharing |
