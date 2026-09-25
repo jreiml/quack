@@ -129,15 +129,25 @@ name nor the owner proves who someone is; check the approval code.
 Messages are marked `from-mode="bypass"`; Claude may still hold them under a
 prompting permission mode or an inbound message policy.
 
-**Codex.** quack needs `codex queue` (tested with 0.156.1) and a CLI session
-that owns its thread: `quack codex` or `codex --no-daemon`. Shared-daemon, App
-Server and desktop sessions can't pair. A pairing belongs to the thread, so
-switching threads ends it. Messages arrive as queued input: an idle Codex starts
-a turn, a busy one reads them afterwards. A brand-new Codex gets its first
-message through its queue database, which needs `sqlite3`; otherwise message it
-once before pairing. In Codex's sandbox, `quack send` works but `quack pair`,
-`quack unpair` and `quack invite` don't, so run them with escalated permissions
-or type them with `!`.
+**Codex.** quack needs `codex queue` (tested with 0.156.1) and a CLI session.
+A pairing belongs to the thread, so switching threads ends it. Messages arrive
+as queued input: an idle Codex starts a turn, a busy one reads them afterwards.
+`quack codex` runs `codex --no-daemon`; a plain `codex` on the shared daemon can
+pair too by running `quack invite` or `quack pair` itself. A brand-new Codex
+gets its first message through its queue database, which needs `sqlite3`;
+otherwise message it once before pairing.
+
+Native messages are opt-in with `QUACK_CODEX_NATIVE=1`: `quack codex` then runs
+Codex on its own app server, and a plain `codex` pairs natively when its
+`quack invite` or `quack pair` sees the variable. They arrive the way Codex's own
+`send_message_to_thread` delivers them, shown as "Sent by Codex from task <peer>
+via quack": an idle Codex starts a turn at once, a busy one reads them in its
+current turn. `quack codex` passes `-c`, `--enable` and `--disable` to the app
+server too; `--profile` isn't supported.
+
+In Codex's sandbox, `quack send` works but `quack pair`, `quack unpair` and
+`quack invite` don't, so run them with escalated permissions or type them with
+`!`.
 
 ### Plugin
 

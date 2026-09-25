@@ -87,14 +87,15 @@ func cmdAgent(agent string, args []string) {
 	if detach {
 		launch = append(launch, "--detach")
 	}
-	launch = append(launch, "--", agent)
 	if agent == "claude" {
-		launch = append(launch, "--dangerously-skip-permissions")
+		launch = append(launch, "--", agent, "--dangerously-skip-permissions")
 		if name != "" {
 			launch = append(launch, "--name", name)
 		}
+	} else if os.Getenv("QUACK_CODEX_NATIVE") == "1" {
+		launch = append(launch, "--", quackBin(), "_codex")
 	} else {
-		launch = append(launch, "--no-daemon")
+		launch = append(launch, "--", agent, "--no-daemon")
 	}
 	cmdNew(append(launch, forwarded...))
 }
@@ -419,10 +420,8 @@ func pickTarget(args []string, strict bool, candidates func() []info) host {
 		}
 		return h
 	}
-	if name := os.Getenv("QUACK_SESSION"); name != "" {
-		if s := (server{name}); s.alive() {
-			return s
-		}
+	if s, ok := currentSession(); ok {
+		return s
 	}
 	list := candidates()
 	switch {
@@ -436,6 +435,32 @@ func pickTarget(args []string, strict bool, candidates func() []info) host {
 		fatalf("several sessions; name one")
 	}
 	return pick(list)
+}
+
+func currentSession() (server, bool) {
+	name := os.Getenv("QUACK_SESSION")
+	if name == "" {
+		return server{}, false
+	}
+	s := server{name}
+	panes, err := s.run("list-panes", "-t", "=main", "-F", "#{pane_pid}")
+	if err != nil {
+		return server{}, false
+	}
+	parents, err := processParents()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	for _, pane := range strings.Fields(panes) {
+		root, err := strconv.Atoi(pane)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		if descendsFrom(os.Getpid(), root, parents) {
+			return s, true
+		}
+	}
+	return server{}, false
 }
 
 func pick(list []info) host {

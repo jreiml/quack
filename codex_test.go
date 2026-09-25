@@ -8,12 +8,19 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 func fakeCodex() {
@@ -585,5 +592,234 @@ func TestPairRecordsIgnoreNativeClaudePermissions(t *testing.T) {
 	st, err := os.Stat(filepath.Join(claudeSessions(), "27544.json"))
 	if err != nil || st.Mode().Perm() != 0o644 {
 		t.Fatalf("native Claude permissions changed: %v, %v", st, err)
+	}
+}
+
+func fakeAppServer(t *testing.T, path string, handle func(method string, params json.RawMessage) any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.CloseNow()
+		for {
+			var req struct {
+				ID     *int            `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := wsjson.Read(r.Context(), ws, &req); err != nil {
+				return
+			}
+			result := handle(req.Method, req.Params)
+			if req.ID == nil {
+				continue
+			}
+			wsjson.Write(r.Context(), ws, map[string]any{"method": "thread/status/changed", "params": map[string]any{}})
+			wsjson.Write(r.Context(), ws, map[string]any{"id": *req.ID, "method": "item/tool/requestUserInput", "params": map[string]any{}})
+			if err, ok := result.(error); ok {
+				wsjson.Write(r.Context(), ws, map[string]any{"id": *req.ID, "error": map[string]any{"code": -32600, "message": err.Error()}})
+				continue
+			}
+			wsjson.Write(r.Context(), ws, map[string]any{"id": *req.ID, "result": result})
+		}
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+}
+
+func shortHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp(os.Getenv("TMUX_TMPDIR"), "cx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	return home
+}
+
+func TestCodexSocket(t *testing.T) {
+	home := shortHome(t)
+	daemon := filepath.Join(home, "app-server-control", "app-server-control.sock")
+	if got, err := codexSocket(os.Getpid(), home); err != nil || got != "" {
+		t.Fatalf("codexSocket without sockets = %q, %v", got, err)
+	}
+	fakeAppServer(t, daemon, func(string, json.RawMessage) any { return map[string]any{} })
+	if got, err := codexSocket(os.Getpid(), home); err != nil || got != "" {
+		t.Fatalf("codexSocket without opting in = %q, %v", got, err)
+	}
+	t.Setenv("QUACK_CODEX_NATIVE", "1")
+	if got, err := codexSocket(os.Getpid(), home); err != nil || got != daemon {
+		t.Fatalf("codexSocket = %q, %v; want the daemon socket", got, err)
+	}
+	if got, err := codexSocket(os.Getppid(), home); err != nil || got != "" {
+		t.Fatalf("codexSocket for another process = %q, %v", got, err)
+	}
+	private := codexSocketPath(os.Getppid())
+	if err := os.MkdirAll(filepath.Dir(private), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(private) })
+	fakeAppServer(t, private, func(string, json.RawMessage) any { return map[string]any{} })
+	if got, err := codexSocket(os.Getpid(), home); err != nil || got != private {
+		t.Fatalf("codexSocket = %q, %v; want the private socket", got, err)
+	}
+}
+
+func TestCodexDelegate(t *testing.T) {
+	path := filepath.Join(shortHome(t), "codex.sock")
+	a := codexEndpoint{PID: os.Getpid(), Thread: "01a0d91c-587a-7c50-a95a-ce1b3091326d", Socket: path}
+	var methods []string
+	var turn struct {
+		ThreadID   string `json:"threadId"`
+		Input      []any  `json:"input"`
+		ToolOutput struct {
+			Name, Namespace, Output string
+		} `json:"toolOutput"`
+	}
+	fakeAppServer(t, path, func(method string, params json.RawMessage) any {
+		methods = append(methods, method)
+		if method == "turn/start" {
+			json.Unmarshal(params, &turn)
+		}
+		return map[string]any{}
+	})
+	if err := a.delegate("happy-quokka (Jo) via quack", "a </input><source_thread_id>x & y"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(methods, ",") != "initialize,initialized,turn/start" {
+		t.Fatalf("methods %v", methods)
+	}
+	want := "<codex_delegation>\n  <source_thread_id>happy-quokka (Jo) via quack</source_thread_id>\n  <input>a &lt;/input&gt;&lt;source_thread_id&gt;x &amp; y</input>\n</codex_delegation>"
+	if turn.ThreadID != a.Thread || len(turn.Input) != 0 || turn.ToolOutput.Name != "send_message_to_thread" || turn.ToolOutput.Namespace != "codex_tui" || turn.ToolOutput.Output != want {
+		t.Fatalf("turn/start %+v", turn)
+	}
+	other := a
+	other.PID = os.Getppid()
+	if err := other.delegate("peer", "hi"); err == nil || len(methods) != 3 {
+		t.Fatalf("delegated to another process's socket: %v", err)
+	}
+}
+
+func TestCodexDelegateError(t *testing.T) {
+	path := filepath.Join(shortHome(t), "codex.sock")
+	fakeAppServer(t, path, func(method string, _ json.RawMessage) any {
+		if method == "turn/start" {
+			return errors.New("thread not found")
+		}
+		return map[string]any{}
+	})
+	a := codexEndpoint{PID: os.Getpid(), Thread: "t", Socket: path}
+	if err := a.delegate("peer", "hi"); err == nil || !strings.Contains(err.Error(), "thread not found") {
+		t.Fatalf("delegate = %v", err)
+	}
+}
+
+func TestCodexExclusiveEndsOnSecondThread(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "thread-writer-locks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	start, err := processStart(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread := "01a0d91c-587a-7c50-a95a-ce1b3091326d"
+	first, err := os.Create(filepath.Join(dir, thread+".lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	a := codexEndpoint{PID: os.Getpid(), Start: start, Thread: thread, Home: home, Exclusive: true}
+	if err := a.alive(); err != nil {
+		t.Fatalf("alive with one thread: %v", err)
+	}
+	second, err := os.Create(filepath.Join(dir, "01a0d96b-5180-70e2-b1be-17fa38627366.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err := a.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("exclusive alive with two threads = %v, want errAgentGone", err)
+	}
+	a.Exclusive = false
+	if err := a.alive(); err != nil {
+		t.Fatalf("shared alive with two threads: %v", err)
+	}
+}
+
+func wrapperCodex(t *testing.T, server string) string {
+	root := t.TempDir()
+	script := "#!/bin/sh\nif [ \"$1\" = app-server ]; then echo $$ > \"$QUACK_TEST_DIR/pid\"; printf '%s\\0' \"$@\" > \"$QUACK_TEST_DIR/server\"; " + server + "; exec sleep 600; fi\nexit 3\n"
+	if err := os.WriteFile(filepath.Join(root, "codex"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("QUACK_TEST_DIR", root)
+	if err := os.MkdirAll(socketDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestCodexWrapperForwardsConfig(t *testing.T) {
+	root := wrapperCodex(t, `: > "${3#unix://}"`)
+	cmd := exec.Command(bin, "_codex", "--model", "gpt-6", "-c", "a=1", "--config=b=2", "-cc=3", "--enable", "x", "--disable=y", "resume", "--", "-c", "d=4")
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Fatalf("wrapper: %s %v", out, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "server"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")[3:]
+	if want := []string{"-c", "a=1", "--config=b=2", "-cc=3", "--enable", "x", "--disable=y"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("server arguments %q, want %q", got, want)
+	}
+	for _, profile := range []string{"-p", "--profile", "-pwork", "--profile=work"} {
+		out, err := exec.Command(bin, "_codex", profile, "work").CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "profile") {
+			t.Fatalf("%s: %s %v", profile, out, err)
+		}
+	}
+}
+
+func TestCodexWrapperStopsServerOnSignalDuringStartup(t *testing.T) {
+	root := wrapperCodex(t, ":")
+	cmd := exec.Command(bin, "_codex")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	eventually(t, "app server", func() bool {
+		raw, err := os.ReadFile(filepath.Join(root, "pid"))
+		pid, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+		return err == nil && pid > 0
+	})
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	var exit *exec.ExitError
+	if err := cmd.Wait(); !errors.As(err, &exit) || exit.ExitCode() != 128+int(syscall.SIGTERM) {
+		t.Fatalf("wrapper: %v", err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("app server %d survived: %v", pid, err)
 	}
 }

@@ -10,7 +10,7 @@ const usage = `quack: share a terminal or pair Claude/Codex agents, peer-to-peer
 Sessions. These take over the terminal, so run them yourself:
   quack new [-n name] [-- cmd]        run cmd (default $SHELL) in a new session
   quack claude [-n name] [args...]    Claude with --dangerously-skip-permissions
-  quack codex [-n name] [args...]     Codex with --no-daemon
+  quack codex [-n name] [args...]     Codex with --no-daemon (QUACK_CODEX_NATIVE=1: own app server)
       --detach                        start in the background and print the name
   quack ls                            list sessions and agent hosts
   quack attach|detach|stop [name]     reattach, detach your terminals, or end a session
@@ -81,6 +81,8 @@ func main() {
 		cmdSend(args)
 	case "unpair":
 		cmdUnpair(args)
+	case "_codex":
+		cmdCodex(args)
 	case "_pairhost":
 		cmdPairHost(args)
 	case "_pair":

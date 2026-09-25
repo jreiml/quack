@@ -286,3 +286,24 @@ func TestClientKeyPerLink(t *testing.T) {
 		f.Close()
 	}
 }
+
+func TestCurrentSessionNeedsPane(t *testing.T) {
+	other := server{quack(t, "new", "-n", "t-other", "--", "sleep", "300")}
+	defer quack(t, "stop", other.name)
+	t.Setenv("QUACK_SESSION", other.name)
+	if _, ok := currentSession(); ok {
+		t.Fatalf("trusted QUACK_SESSION outside the session's pane")
+	}
+	s := server{quack(t, "new", "-n", "t-cur", "--", "sh", "-c", `sleep 1; "$0" stop; sleep 300`, bin)}
+	deadline := time.Now().Add(10 * time.Second)
+	for s.alive() {
+		if time.Now().After(deadline) {
+			quack(t, "stop", s.name)
+			t.Fatalf("quack stop inside t-cur did not stop it")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !other.alive() {
+		t.Fatalf("quack stop inside t-cur stopped t-other")
+	}
+}

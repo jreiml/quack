@@ -196,8 +196,11 @@ func cmdInviteNew(args []string) {
 }
 
 func agentInviteHost(args []string) host {
-	if len(args) > 0 || os.Getenv("QUACK_SESSION") != "" {
+	if len(args) > 0 {
 		return targetHost(args)
+	}
+	if s, ok := currentSession(); ok {
+		return s
 	}
 	command := strings.Join(append([]string{"quack"}, os.Args[1:]...), " ")
 	refuseCodexSandbox(nil, command)
