@@ -126,12 +126,12 @@ name nor the owner proves who someone is; check the approval code.
 
 **Claude.** quack uses Claude Code's local messaging socket (checked against
 2.1.281). A pairing belongs to the Claude process, not a conversation.
-Messages are marked `from-mode="bypass"`, so a Claude in a prompting mode such
-as auto holds each one until you approve it. To deliver them without asking, set
-**Messages from your other sessions** to accept in `/config`, or add
-`"crossSessionInbound": "accept"` to `~/.claude/settings.json`. That accepts
-messages from every other session, not just quack, and managed or project
-settings can still hold or refuse them.
+Messages are marked `from-mode="bypass"`: `quack claude` delivers them right
+away, but a Claude in a prompting mode such as auto holds each one until you
+approve it. To deliver them without asking, start that Claude with
+`claude --settings '{"crossSessionInbound":"accept"}'`, or set **Messages from
+your other sessions** to accept in `/config` for every session. Either accepts
+messages from all your other sessions, not just quack.
 
 **Codex.** quack needs `codex queue` (tested with 0.156.1) and a CLI session.
 A pairing belongs to the thread, so switching threads ends it. Messages arrive

@@ -23,10 +23,11 @@ description: Install quack when it's missing. Use only when `quack` isn't found 
   - `sqlite3`, which lets quack deliver the first message to a brand-new Codex
     session.
   - A Claude in a prompting permission mode such as auto holds each peer
-    message for approval. To deliver them without asking, the human can set
-    **Messages from your other sessions** to accept in `/config`, or add
-    `"crossSessionInbound": "accept"` to `~/.claude/settings.json`. It applies
-    to messages from all their other sessions, so it's their call; don't change
-    it for them.
+    message for approval; `quack claude` doesn't. To deliver them without
+    asking, the human can start Claude with
+    `claude --settings '{"crossSessionInbound":"accept"}'`, or set **Messages
+    from your other sessions** to accept in `/config` for every session. It
+    accepts messages from all their other sessions, so it's their call; don't
+    change it for them.
 
 Once it's installed, `quack --help` lists the commands.
