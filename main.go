@@ -81,6 +81,8 @@ func main() {
 		cmdSend(args)
 	case "unpair":
 		cmdUnpair(args)
+	case "_pairhost":
+		cmdPairHost(args)
 	case "_pair":
 		cmdPairWorker(args)
 	case "_expire":

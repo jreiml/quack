@@ -3,18 +3,20 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,77 +27,158 @@ import (
 	"tailscale.com/types/logger"
 )
 
-const pairProtocol = 2
+const (
+	pairProtocol    = 3
+	pairOutboxLimit = 30
+)
+
+func pairOfflineLimit() time.Duration {
+	if d, err := time.ParseDuration(os.Getenv("QUACK_PAIR_OFFLINE_LIMIT")); err == nil {
+		return d
+	}
+	return 10 * time.Minute
+}
 
 type pairFrame struct {
 	Identity *agentIdentity `json:"identity,omitempty"`
 	Type     string         `json:"type"`
 	Version  int            `json:"version,omitempty"`
 	ID       string         `json:"id,omitempty"`
+	Seq      int64          `json:"seq,omitempty"`
+	Resume   bool           `json:"resume,omitempty"`
 	Text     string         `json:"text,omitempty"`
+}
+
+var errPairClosed = errors.New("pair transport closed")
+
+type pairWrite struct {
+	f    pairFrame
+	done chan error
 }
 
 type pairWire struct {
 	in     chan pairFrame
 	errors chan error
 	done   chan struct{}
-	out    io.Writer
-	failed bool
+	out    chan pairWrite
+	closer io.Closer
+	once   sync.Once
 }
 
-func newPairWire(r io.Reader, w io.Writer) *pairWire {
-	p := &pairWire{in: make(chan pairFrame), errors: make(chan error, 1), done: make(chan struct{}), out: w}
-	go func() {
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 4096), 2*pairMessageLimit+4096)
-		for scanner.Scan() {
-			var f pairFrame
-			if err := json.Unmarshal(scanner.Bytes(), &f); err != nil {
-				p.errors <- fmt.Errorf("invalid pair frame: %w", err)
-				return
-			}
-			if len(f.Text) > pairMessageLimit || len(f.ID) > 128 {
-				p.errors <- fmt.Errorf("pair frame too large")
-				return
-			}
-			select {
-			case p.in <- f:
-			case <-p.done:
-				return
-			}
-		}
-		err := scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		p.errors <- err
-	}()
+func newPairWire(r io.Reader, w io.Writer, closer io.Closer) *pairWire {
+	p := &pairWire{in: make(chan pairFrame), errors: make(chan error, 1), done: make(chan struct{}), out: make(chan pairWrite, 64), closer: closer}
+	go p.read(r)
+	go p.write(w)
 	return p
 }
 
-func (p *pairWire) send(f pairFrame) error {
-	if p.failed {
-		return fmt.Errorf("pair transport closed")
+func (p *pairWire) read(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 4096), 2*pairMessageLimit+4096)
+	for scanner.Scan() {
+		var f pairFrame
+		if err := json.Unmarshal(scanner.Bytes(), &f); err != nil {
+			p.fail(fmt.Errorf("invalid pair frame: %w", err))
+			return
+		}
+		if len(f.Text) > pairMessageLimit || len(f.ID) > 128 {
+			p.fail(fmt.Errorf("pair frame too large"))
+			return
+		}
+		select {
+		case p.in <- f:
+		case <-p.done:
+			return
+		}
 	}
-	done := make(chan error, 1)
-	go func() { done <- json.NewEncoder(p.out).Encode(f) }()
+	err := scanner.Err()
+	if err == nil {
+		err = io.EOF
+	}
+	p.fail(err)
+}
+
+func (p *pairWire) write(w io.Writer) {
+	enc := json.NewEncoder(w)
+	for {
+		select {
+		case m := <-p.out:
+			stall := time.AfterFunc(10*time.Second, func() { p.fail(fmt.Errorf("peer stopped reading")) })
+			err := enc.Encode(m.f)
+			stall.Stop()
+			if m.done != nil {
+				m.done <- err
+			}
+			if err != nil {
+				p.fail(err)
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+func (p *pairWire) fail(err error) {
 	select {
-	case err := <-done:
-		p.failed = err != nil
-		return err
-	case <-time.After(3 * time.Second):
-		p.failed = true
-		return fmt.Errorf("peer stopped reading")
+	case p.errors <- err:
+	default:
+	}
+	p.close()
+}
+
+func (p *pairWire) close() {
+	p.once.Do(func() {
+		close(p.done)
+		if p.closer != nil {
+			p.closer.Close()
+		}
+	})
+}
+
+func (p *pairWire) send(f pairFrame) error {
+	select {
+	case <-p.done:
+		return errPairClosed
+	case p.out <- pairWrite{f: f}:
+		return nil
+	default:
+		p.fail(fmt.Errorf("peer stopped reading"))
+		return errPairClosed
+	}
+}
+
+func (p *pairWire) finish(f pairFrame, linger time.Duration) {
+	done := make(chan error, 1)
+	select {
+	case p.out <- pairWrite{f, done}:
+		select {
+		case <-done:
+		case <-p.done:
+		case <-time.After(3 * time.Second):
+		}
+	case <-p.done:
+	}
+	deadline := time.After(linger)
+	for {
+		select {
+		case <-p.in:
+		case <-p.done:
+			return
+		case <-deadline:
+			p.close()
+			return
+		}
 	}
 }
 
 type pairRate struct{ times []time.Time }
 
-func (r *pairRate) take(now time.Time) bool {
+func (r *pairRate) take(now time.Time, limit int) bool {
 	for len(r.times) > 0 && !r.times[0].After(now.Add(-10*time.Minute)) {
 		r.times = r.times[1:]
 	}
-	if len(r.times) >= 30 {
+	if len(r.times) >= limit {
 		return false
 	}
 	r.times = append(r.times, now)
@@ -147,39 +230,106 @@ func pairGoodbye(p *pairWire, fallback string) string {
 	}
 }
 
-func pairDrain(p *pairWire, limit time.Duration) {
-	deadline := time.After(limit)
-	for {
-		select {
-		case <-p.in:
-		case <-p.errors:
-			return
-		case <-deadline:
-			return
+type pairConn struct {
+	wire  *pairWire
+	hello pairFrame
+}
+
+type pairLink struct {
+	b                          *pairInbox
+	peer                       string
+	wire                       *pairWire
+	attach                     func(pairConn) error
+	dropped                    func()
+	state                      func(string)
+	outbox                     []pairFrame
+	sent, delivered            int64
+	offline                    time.Time
+	outbound, inbound          pairRate
+	seen                       map[string]bool
+	sentNotice, receivedNotice time.Time
+}
+
+func (l *pairLink) connect(c pairConn) {
+	if err := l.attach(c); err != nil {
+		l.b.logger.Printf("pair resume refused: %v", err)
+		c.wire.close()
+		if l.wire == nil {
+			if l.offline.IsZero() {
+				l.offline = time.Now()
+				l.state("offline")
+			}
+			l.dropped()
 		}
+		return
+	}
+	if l.wire != nil {
+		l.wire.close()
+	}
+	if !l.offline.IsZero() {
+		l.b.logger.Printf("pair connection resumed after %v", time.Since(l.offline).Round(time.Second))
+	}
+	l.wire, l.offline = c.wire, time.Time{}
+	for _, f := range l.outbox {
+		l.wire.send(f)
+	}
+	l.state("active")
+}
+
+func (l *pairLink) drop(err error) {
+	l.b.logger.Printf("pair connection lost: %v", err)
+	l.wire.close()
+	l.wire, l.offline = nil, time.Now()
+	l.state("offline")
+	l.dropped()
+}
+
+func (l *pairLink) end(reason string) {
+	if l.wire != nil {
+		l.wire.finish(pairFrame{Type: "bye", Text: reason}, 2*time.Second)
 	}
 }
 
-func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, check func() string) string {
+func (l *pairLink) notice(last *time.Time, text string) {
+	if time.Since(*last) >= 10*time.Minute {
+		pairNotice(l.b, l.peer, text)
+		*last = time.Now()
+	}
+}
+
+func (l *pairLink) run(ctx context.Context, conns <-chan pairConn, check func() string) string {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
-	var outbound, inbound pairRate
-	seen := map[string]bool{}
-	var sentNotice, receivedNotice time.Time
 	for {
+		var in <-chan pairFrame
+		var errs <-chan error
+		if l.wire != nil {
+			in, errs = l.wire.in, l.wire.errors
+		}
 		select {
 		case <-ctx.Done():
 			select {
-			case <-b.stop:
+			case <-l.b.stop:
 				return "The peer ended the pairing."
 			default:
 			}
-			return pairGoodbye(p, "The pairing was stopped.")
-		case <-b.stop:
+			if l.wire == nil {
+				return "The pairing was stopped."
+			}
+			return pairGoodbye(l.wire, "The pairing was stopped.")
+		case <-l.b.stop:
 			return "The peer ended the pairing."
+		case c := <-conns:
+			if c.hello.Type == "bye" {
+				c.wire.close()
+				return pairEnded(c.hello.Text)
+			}
+			l.connect(c)
+		case err := <-errs:
+			l.drop(err)
 		case <-tick.C:
-			if err := b.record.alive(); errors.Is(err, errAgentGone) {
-				if b.record.Codex != nil {
+			if err := l.b.record.alive(); errors.Is(err, errAgentGone) {
+				if l.b.record.Codex != nil {
 					return "The peer's Codex session exited."
 				}
 				return "The peer's Claude exited."
@@ -189,65 +339,80 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 					return reason
 				}
 			}
-		case err := <-p.errors:
-			if !errors.Is(err, io.EOF) {
-				b.logger.Printf("pair transport: %v", err)
+			if l.wire == nil && time.Since(l.offline) > pairOfflineLimit() {
+				return "The connection to the peer was lost."
 			}
-			return "The connection to the peer ended."
-		case f := <-b.messages:
-			if seen["out:"+f.ID] {
-				continue
-			}
-			if !outbound.take(time.Now()) {
-				if time.Since(sentNotice) >= 10*time.Minute {
-					pairNotice(b, peer, "Quack did not send your message: the pairing reached its limit of 30 messages per 10 minutes. Wait before sending again; do not retry automatically.")
-					sentNotice = time.Now()
-				}
-				continue
-			}
-			if len(seen) >= 120 {
-				seen = map[string]bool{}
-			}
-			seen["out:"+f.ID] = true
-			if err := p.send(pairFrame{Type: "message", ID: f.ID, Text: f.Message.Content}); err != nil {
-				b.logger.Printf("pair send: %v", err)
-				return "The connection to the peer ended."
-			}
-		case f := <-p.in:
-			switch f.Type {
-			case "bye":
-				return pairEnded(f.Text)
-			case "limit":
-				if time.Since(receivedNotice) >= 10*time.Minute {
-					pairNotice(b, peer, "Quack did not deliver your message: the peer's incoming limit of 30 messages per 10 minutes was reached. Do not retry automatically.")
-					receivedNotice = time.Now()
-				}
-			case "message":
-				if f.ID == "" || f.Text == "" {
-					return "The peer sent an invalid message."
-				}
-				if seen["in:"+f.ID] {
-					continue
-				}
-				if !inbound.take(time.Now()) {
-					if err := p.send(pairFrame{Type: "limit"}); err != nil {
-						return "The connection to the peer ended."
-					}
-					continue
-				}
-				if len(seen) >= 120 {
-					seen = map[string]bool{}
-				}
-				seen["in:"+f.ID] = true
-				if err := b.record.send(b.record.Identity.label(), f.Text); err != nil {
-					b.logger.Printf("pair delivery: %v", err)
-					return "The peer's agent became unavailable."
-				}
-			default:
-				return "The peer sent an unsupported pair frame."
+		case f := <-l.b.messages:
+			l.queue(f)
+		case f := <-in:
+			if reason := l.receive(f); reason != "" {
+				return reason
 			}
 		}
 	}
+}
+
+func (l *pairLink) queue(f localFrame) {
+	if l.seen[f.ID] {
+		return
+	}
+	if len(l.outbox) >= pairOutboxLimit {
+		l.notice(&l.sentNotice, "Quack did not send your message: the peer has not received your earlier messages yet. Wait before sending again; do not retry automatically.")
+		return
+	}
+	if !l.outbound.take(time.Now(), 30) {
+		l.notice(&l.sentNotice, "Quack did not send your message: the pairing reached its limit of 30 messages per 10 minutes. Wait before sending again; do not retry automatically.")
+		return
+	}
+	if len(l.seen) >= 120 {
+		l.seen = map[string]bool{}
+	}
+	l.seen[f.ID] = true
+	l.sent++
+	m := pairFrame{Type: "message", Seq: l.sent, ID: f.ID, Text: f.Message.Content}
+	l.outbox = append(l.outbox, m)
+	if l.wire != nil {
+		l.wire.send(m)
+	}
+}
+
+func (l *pairLink) receive(f pairFrame) string {
+	switch f.Type {
+	case "bye":
+		return pairEnded(f.Text)
+	case "limit":
+		l.notice(&l.receivedNotice, "Quack did not deliver your message: the peer's incoming message limit was reached. Do not retry automatically.")
+	case "ack":
+		n := 0
+		for n < len(l.outbox) && l.outbox[n].Seq <= f.Seq {
+			n++
+		}
+		l.outbox = slices.Delete(l.outbox, 0, n)
+	case "message":
+		if f.Seq <= 0 || f.Text == "" {
+			return "The peer sent an invalid message."
+		}
+		if f.Seq <= l.delivered {
+			l.wire.send(pairFrame{Type: "ack", Seq: f.Seq})
+			return ""
+		}
+		if f.Seq != l.delivered+1 {
+			return "The peer sent messages out of order."
+		}
+		if l.inbound.take(time.Now(), 60) {
+			if err := l.b.record.send(l.b.record.Identity.label(), f.Text); err != nil {
+				l.b.logger.Printf("pair delivery: %v", err)
+				return "The peer's agent became unavailable."
+			}
+		} else {
+			l.wire.send(pairFrame{Type: "limit"})
+		}
+		l.delivered = f.Seq
+		l.wire.send(pairFrame{Type: "ack", Seq: f.Seq})
+	default:
+		return "The peer sent an unsupported pair frame."
+	}
+	return ""
 }
 
 type pairConfig struct {
@@ -392,12 +557,123 @@ func cmdPairWorker(args []string) {
 	}
 }
 
-func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report func(pairFrame) bool) string {
-	cl := &tailcat.Client{Server: tailcat.Addr(cfg.Addr), Key: cfg.Key, Logf: logger.Discard}
-	defer cl.Close()
-	dialCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	conn, err := cl.DialTCPPort(dialCtx, 22)
+type pairDialer struct {
+	cfg    pairConfig
+	cl     *tailcat.Client
+	logger *log.Logger
+}
+
+func (d *pairDialer) close() {
+	if d.cl != nil {
+		d.cl.Close()
+		d.cl = nil
+	}
+}
+
+func (d *pairDialer) dial(ctx context.Context, timeout time.Duration, resume bool) (*pairWire, error) {
+	if d.cl == nil {
+		d.cl = &tailcat.Client{Server: tailcat.Addr(d.cfg.Addr), Key: d.cfg.Key, Logf: logger.Discard}
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	conn, err := d.cl.DialTCPPort(dialCtx, 22)
 	cancel()
+	if err != nil {
+		d.close()
+		return nil, err
+	}
+	return pairSSH(ctx, conn, d.cfg, resume, 30*time.Second)
+}
+
+func pairSSH(ctx context.Context, conn net.Conn, cfg pairConfig, resume bool, setup time.Duration) (*pairWire, error) {
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	if err := conn.SetDeadline(time.Now().Add(setup)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr, &ssh.ClientConfig{User: "quack", HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	client := ssh.NewClient(c, chans, reqs)
+	w, err := pairSession(client, cfg, resume)
+	if err == nil {
+		err = conn.SetDeadline(time.Time{})
+	}
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	go keepalive(client, "")
+	return w, nil
+}
+
+func pairSession(client *ssh.Client, cfg pairConfig, resume bool) (*pairWire, error) {
+	sess, err := client.NewSession()
+	if err != nil {
+		return nil, err
+	}
+	out, err := sess.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	in, err := sess.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	sess.Stderr = os.Stderr
+	if err := sess.Start("pair-invite " + cfg.Invite + " " + cfg.Identity.Owner); err != nil {
+		return nil, err
+	}
+	w := newPairWire(out, in, client)
+	return w, w.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &cfg.Identity, Resume: resume})
+}
+
+func (d *pairDialer) redial(ctx context.Context, b *pairInbox, resume bool, since time.Time) (*pairWire, error) {
+	delay := time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		if err := b.record.alive(); errors.Is(err, errAgentGone) {
+			return nil, err
+		}
+		if time.Since(since) > pairOfflineLimit() {
+			return nil, fmt.Errorf("lost the connection to the host")
+		}
+		w, err := d.dial(ctx, 20*time.Second, resume)
+		if err == nil {
+			return w, nil
+		}
+		d.logger.Printf("pair redial: %v", err)
+		delay = min(2*delay, 30*time.Second)
+	}
+}
+
+func firstFrame(ctx context.Context, w *pairWire) (pairFrame, error) {
+	select {
+	case f := <-w.in:
+		return f, nil
+	case err := <-w.errors:
+		return pairFrame{}, err
+	case <-ctx.Done():
+		return pairFrame{}, ctx.Err()
+	case <-time.After(30 * time.Second):
+		return pairFrame{}, fmt.Errorf("the host did not answer")
+	}
+}
+
+func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report func(pairFrame) bool) string {
+	d := &pairDialer{cfg: cfg, logger: b.logger}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			d.close()
+		}
+	}()
 	fail := func(err error) string {
 		text := "Could not pair: " + err.Error()
 		if report(pairFrame{Type: "error", Text: text}) {
@@ -405,257 +681,121 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 		}
 		return text
 	}
+	w, err := d.dial(ctx, 90*time.Second, false)
 	if err != nil {
-		return fail(err)
-	}
-	defer conn.Close()
-	go func() {
-		select {
-		case <-ctx.Done():
-			select {
-			case <-time.After(4 * time.Second):
-				conn.Close()
-			case <-b.done:
-			}
-		case <-b.done:
-		}
-	}()
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
-		return fail(err)
-	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, cfg.Addr, &ssh.ClientConfig{User: "quack", HostKeyCallback: ssh.InsecureIgnoreHostKey()})
-	if err != nil {
-		return fail(err)
-	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		return fail(err)
-	}
-	client := ssh.NewClient(c, chans, reqs)
-	defer client.Close()
-	sess, err := client.NewSession()
-	if err != nil {
-		return fail(err)
-	}
-	defer sess.Close()
-	out, err := sess.StdoutPipe()
-	if err != nil {
-		return fail(err)
-	}
-	in, err := sess.StdinPipe()
-	if err != nil {
-		return fail(err)
-	}
-	sess.Stderr = os.Stderr
-	if err := sess.Start("pair-invite " + cfg.Invite + " " + cfg.Identity.Owner); err != nil {
-		return fail(err)
-	}
-	go keepalive(client)
-	p := newPairWire(out, in)
-	defer close(p.done)
-	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &cfg.Identity}); err != nil {
 		return fail(err)
 	}
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
-	for {
+	var ready pairFrame
+	var lostAt time.Time
+	for ready.Type == "" {
 		select {
 		case <-ctx.Done():
+			w.finish(pairFrame{Type: "bye", Text: "The peer cancelled the pairing."}, 0)
 			return fail(fmt.Errorf("pairing cancelled"))
 		case <-tick.C:
 			if err := b.record.alive(); errors.Is(err, errAgentGone) {
+				w.finish(pairFrame{Type: "bye", Text: "The peer's agent exited."}, 0)
 				return fail(err)
 			}
-		case err := <-p.errors:
-			return fail(err)
-		case f := <-p.in:
+		case err := <-w.errors:
+			w.close()
+			b.logger.Printf("pair connection lost while waiting: %v", err)
+			if lostAt.IsZero() {
+				lostAt = time.Now()
+			}
+			if w, err = d.redial(ctx, b, false, lostAt); err != nil {
+				return fail(err)
+			}
+		case f := <-w.in:
+			lostAt = time.Time{}
 			switch f.Type {
 			case "waiting":
 			case "bye":
+				w.close()
 				return fail(fmt.Errorf("%s", f.Text))
 			case "ready":
-				if f.Version != pairProtocol || f.Identity == nil {
-					return fail(fmt.Errorf("unsupported pairing protocol; update quack on both sides"))
-				}
-				peer := f.Identity.Owner
-				if err := b.setPeer(*f.Identity); err != nil {
-					return fail(err)
-				}
-				prompt := pairPrompt(b)
-				if !report(pairFrame{Type: "ready", Text: prompt}) {
-					if err := pairNotice(b, peer, prompt); err != nil {
-						reason := "The peer's agent could not receive messages: " + err.Error()
-						if err := p.send(pairFrame{Type: "bye", Text: reason}); err != nil {
-							b.logger.Printf("pair goodbye: %v", err)
-						}
-						return reason
-					}
-				}
-				reason := bridgePair(ctx, b, p, peer, nil)
-				if err := p.send(pairFrame{Type: "bye", Text: reason}); err != nil {
-					b.logger.Printf("pair goodbye: %v", err)
-				}
-				if err := in.Close(); err != nil {
-					b.logger.Printf("pair close: %v", err)
-				}
-				pairDrain(p, 2*time.Second)
-				return reason
+				ready = f
 			default:
+				w.close()
 				return fail(fmt.Errorf("unsupported pair handshake"))
 			}
 		}
 	}
-}
-
-func pairGate(s host, pub, who, inviteID string) {
-	logger, file := openLog(s.hostName())
-	defer file.Close()
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
-	p := newPairWire(os.Stdin, os.Stdout)
-	defer close(p.done)
-	goodbye := func(reason string) {
-		if err := p.send(pairFrame{Type: "bye", Text: reason}); err != nil {
-			logger.Printf("pair goodbye: %v", err)
+	if ready.Version != pairProtocol || ready.Identity == nil {
+		w.close()
+		return fail(fmt.Errorf("unsupported pairing protocol; update quack on both sides"))
+	}
+	hostIdentity := *ready.Identity
+	peer := hostIdentity.Owner
+	if err := b.setPeer(hostIdentity); err != nil {
+		w.close()
+		return fail(err)
+	}
+	prompt := pairPrompt(b)
+	if !report(pairFrame{Type: "ready", Text: prompt}) {
+		if err := pairNotice(b, peer, prompt); err != nil {
+			reason := "The peer's agent could not receive messages: " + err.Error()
+			w.finish(pairFrame{Type: "bye", Text: reason}, 2*time.Second)
+			return reason
 		}
 	}
-	var peer agentIdentity
-	select {
-	case f := <-p.in:
-		if f.Type != "hello" || f.Version != pairProtocol || f.Identity == nil || !f.Identity.valid() || f.Identity.Owner != who {
-			goodbye("Unsupported pairing protocol; update quack on both sides.")
-			return
-		}
-		peer = *f.Identity
-	case <-ctx.Done():
-		return
-	case <-time.After(10 * time.Second):
-		goodbye("Pair handshake timed out.")
-		return
-	case <-p.errors:
-		return
-	}
-	a, codex, err := s.agent()
-	if err != nil {
-		logger.Printf("%s's agent could not pair: %v", who, err)
-		if err := notify(fmt.Sprintf("%s's agent could not pair: %v", who, err)); err != nil {
-			logger.Printf("notify: %v", err)
-		}
-		goodbye(err.Error())
-		return
-	}
-	identity, err := agentSessionIdentity(a, codex, s.get("host"))
-	if err != nil {
-		goodbye(err.Error())
-		return
-	}
-	b, err := newAgentInbox(a, codex, who, logger)
-	if err != nil {
-		goodbye(err.Error())
-		return
-	}
-	defer b.close()
-	if err := b.setPeer(peer); err != nil {
-		goodbye(err.Error())
-		return
-	}
-	sum := sha256.Sum256([]byte("pair:" + pub + ":" + strconv.Itoa(os.Getpid())))
-	id := fmt.Sprintf("%x", sum)
-	code := codeFor(pub)
-	pidOpt := "pid_" + connID(os.Getenv("TAILCAT_REMOTE_ADDR"))
-	active := "pair_" + id
-	onFatal = func(msg string) { b.close(); logger.Printf("pair: %s", msg) }
-	defer func() { onFatal = nil }()
-	s.set(pidOpt, "pair:"+strconv.Itoa(os.Getpid()))
-	defer func() {
-		if !s.alive() {
-			return
-		}
-		for _, opt := range []string{pidOpt, active, "wait_" + id, "ok_" + id, "bye_" + id, "member_" + id} {
-			s.unset(opt)
-		}
-		s.status()
-	}()
-	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|waiting")
-	if err := requestAdmission(s, inviteID, "pair", id, peer.label(), code); err != nil {
-		goodbye(err.Error())
-		return
-	}
-	admitted := s.get("ok_"+id) != ""
-	if !admitted {
-		logger.Printf("%s's agent (%s) waiting", who, code)
-		s.status()
-		if err := notify(fmt.Sprintf("%s's agent wants to pair (code %s). Ctrl-Q to answer.", who, code)); err != nil {
-			logger.Printf("notify: %v", err)
-		}
-		if err := p.send(pairFrame{Type: "waiting"}); err != nil {
-			logger.Printf("pair wait: %v", err)
-			return
-		}
-	}
-	tick := time.NewTicker(200 * time.Millisecond)
-	defer tick.Stop()
-	reason := ""
-	for s.get("ok_"+id) == "" {
-		select {
-		case <-ctx.Done():
-			reason = pairEndReason(s, id, "The pairing was stopped.")
-		case <-b.stop:
-			reason = "The host ended the pairing."
-		case <-p.errors:
-			return
-		case <-p.in:
-			reason = "The peer cancelled the pairing."
-		case <-tick.C:
-			if !s.alive() {
-				reason = "The host ended the session."
-			} else if s.get("wait_"+id) == "" && s.get("ok_"+id) == "" {
-				reason = pairEndReason(s, id, "The host declined.")
+	linkCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	conns := make(chan pairConn)
+	lost := make(chan struct{}, 1)
+	link := &pairLink{b: b, peer: peer, wire: w, seen: map[string]bool{}, state: func(string) {},
+		attach: func(c pairConn) error {
+			if c.hello.Type != "ready" || c.hello.Identity == nil || *c.hello.Identity != hostIdentity {
+				return fmt.Errorf("unexpected resume reply %q", c.hello.Type)
 			}
-			if reason == "" {
-				if err := b.record.alive(); errors.Is(err, errAgentGone) {
-					reason = "The host's agent exited."
+			return nil
+		},
+		dropped: func() {
+			select {
+			case lost <- struct{}{}:
+			default:
+			}
+		},
+	}
+	handedOff = true
+	go func() {
+		defer d.close()
+		for {
+			select {
+			case <-lost:
+			case <-linkCtx.Done():
+				return
+			}
+			since := time.Now()
+			for {
+				w, err := d.redial(linkCtx, b, true, since)
+				if err != nil {
+					if !errors.Is(err, context.Canceled) {
+						b.logger.Printf("pair resume: %v", err)
+					}
+					return
 				}
+				f, err := firstFrame(linkCtx, w)
+				if err != nil {
+					w.close()
+					b.logger.Printf("pair resume: %v", err)
+					continue
+				}
+				select {
+				case conns <- pairConn{w, f}:
+				case <-linkCtx.Done():
+					w.close()
+					return
+				}
+				break
 			}
 		}
-		if reason != "" {
-			goodbye(reason)
-			return
-		}
-	}
-	if !s.shared() {
-		goodbye("The host stopped sharing.")
-		return
-	}
-	s.set(active, peer.label()+"|"+code+"|"+strconv.Itoa(os.Getpid())+"|active")
-	s.status()
-	if err := p.send(pairFrame{Type: "ready", Version: pairProtocol, Identity: &identity}); err != nil {
-		logger.Printf("pair ready: %v", err)
-		return
-	}
-	logger.Printf("%s's agent (%s) paired", who, code)
-	if err := pairNotice(b, who, pairPrompt(b)); err != nil {
-		logger.Printf("%s's agent (%s): host agent cannot receive messages: %v", who, code, err)
-		goodbye("The host's agent could not receive messages: " + err.Error())
-		return
-	}
-	reason = bridgePair(ctx, b, p, who, func() string {
-		if !s.alive() {
-			return "The host ended the session."
-		}
-		if s.get("ok_"+id) == "" || !s.shared() {
-			return pairEndReason(s, id, "The host stopped sharing.")
-		}
-		if i, ok := loadInvite(s, inviteID); !ok || i.expired() {
-			return "The invite expired."
-		}
-		return ""
-	})
-	if ctx.Err() != nil && !strings.HasPrefix(reason, pairEnded("")) {
-		reason = pairEndReason(s, id, "The host ended the session.")
-	}
-	logger.Printf("%s's agent (%s): %s", who, code, reason)
-	goodbye(reason)
-	pairNotice(b, who, reason)
+	}()
+	reason := link.run(ctx, conns, nil)
+	link.end(reason)
+	return reason
 }
 
 func pairEndReason(s host, id, fallback string) string {
@@ -664,7 +804,6 @@ func pairEndReason(s host, id, fallback string) string {
 	}
 	return fallback
 }
-
 func cmdUnpair(args []string) {
 	if len(args) > 1 {
 		fatalf("usage: quack unpair [name]")
@@ -769,15 +908,15 @@ func cmdUnpair(args []string) {
 func pairs(s host) []entry {
 	var out []entry
 	for id, v := range s.opts("pair_") {
-		f := strings.SplitN(v, "|", 4)
-		if len(f) != 4 {
+		f := strings.SplitN(v, "|", 5)
+		if len(f) != 5 {
 			continue
 		}
 		pid, err := strconv.Atoi(f[2])
-		if err != nil {
+		if err != nil || !processRunning(pid, f[3]) {
 			continue
 		}
-		out = append(out, entry{s: s, hex: id, invite: s.get("member_" + id), name: f[0], code: f[1], pid: pid, state: f[3], pair: true})
+		out = append(out, entry{s: s, hex: id, invite: s.get("member_" + id), name: f[0], code: f[1], pid: pid, start: f[3], state: f[4], pair: true})
 	}
 	return out
 }

@@ -51,6 +51,7 @@ type entry struct {
 	name   string
 	tty    string
 	pid    int
+	start  string
 	pair   bool
 	invite string
 	state  string
@@ -125,8 +126,11 @@ func refreshStatus(s server) {
 		host = append(host, statusEscape("👀 "+strings.Join(names, ", ")))
 	}
 	for _, p := range pairs(s) {
-		if p.state == "active" {
+		switch p.state {
+		case "active":
 			host = append(host, statusEscape("🤖 "+p.name))
+		case "offline":
+			host = append(host, statusEscape("🤖 "+p.name+" (reconnecting)"))
 		}
 	}
 	for _, w := range ws {
@@ -210,7 +214,7 @@ func cmdGate(args []string) {
 				logger.Fatalf("pair process group: %v", err)
 			}
 		}
-		pairGate(h, pub, cleanName(name), inviteID)
+		pairRelay(h, pub, cleanName(name), inviteID, logger)
 		return
 	}
 	s, ok := h.(server)

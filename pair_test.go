@@ -24,27 +24,27 @@ func TestPairRate(t *testing.T) {
 	var r pairRate
 	now := time.Unix(1000, 0)
 	for range 30 {
-		if !r.take(now) {
+		if !r.take(now, 30) {
 			t.Fatal("refused within limit")
 		}
 	}
-	if r.take(now.Add(10*time.Minute - time.Nanosecond)) {
+	if r.take(now.Add(10*time.Minute-time.Nanosecond), 30) {
 		t.Fatal("allowed over limit")
 	}
-	if !r.take(now.Add(10 * time.Minute)) {
+	if !r.take(now.Add(10*time.Minute), 30) {
 		t.Fatal("did not release expired messages")
 	}
 }
 
 func TestPairWireBounds(t *testing.T) {
 	for _, input := range []string{"not json\n", `{"type":"message","text":"` + strings.Repeat("x", pairMessageLimit+1) + "\"}\n", strings.Repeat("x", 3*pairMessageLimit) + "\n"} {
-		p := newPairWire(strings.NewReader(input), io.Discard)
+		p := newPairWire(strings.NewReader(input), io.Discard, nil)
 		select {
 		case <-p.errors:
 		case <-time.After(time.Second):
 			t.Fatal("invalid frame accepted or blocked")
 		}
-		close(p.done)
+		p.close()
 	}
 }
 
@@ -458,22 +458,26 @@ func TestPairBridgeLimit(t *testing.T) {
 	a, z := net.Pipe()
 	defer a.Close()
 	defer z.Close()
-	p := newPairWire(a, a)
-	defer close(p.done)
-	remote := newPairWire(z, z)
-	defer close(remote.done)
+	p := newPairWire(a, a, a)
+	defer p.close()
+	remote := newPairWire(z, z, z)
+	defer remote.close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan string, 1)
-	go func() { done <- bridgePair(ctx, b, p, "Ada Lovelace", nil) }()
+	link := &pairLink{b: b, peer: "Ada Lovelace", wire: p, seen: map[string]bool{}, state: func(string) {}, dropped: func() {}}
+	go func() { done <- link.run(ctx, nil, nil) }()
 	for n := range 30 {
 		f := localFrame{ID: fmt.Sprint(n)}
 		f.Message.Content = "outbound"
 		b.messages <- f
 		select {
 		case got := <-remote.in:
-			if got.Type != "message" {
+			if got.Type != "message" || got.Seq != int64(n+1) {
 				t.Fatal(got)
+			}
+			if n < 29 {
+				remote.send(pairFrame{Type: "ack", Seq: got.Seq})
 			}
 		case <-time.After(time.Second):
 			t.Fatal("bridge stalled")
@@ -710,8 +714,8 @@ func TestPairDeclineGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Process.Kill()
-	p := newPairWire(out, in)
-	defer close(p.done)
+	p := newPairWire(out, in, in)
+	defer p.close()
 	if err := p.send(pairFrame{Type: "hello", Version: pairProtocol, Identity: &agentIdentity{strings.Repeat("a", 64), "brave-otter-123456", "Ada Lovelace", "Codex"}}); err != nil {
 		t.Fatal(err)
 	}

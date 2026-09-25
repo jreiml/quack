@@ -355,15 +355,12 @@ func unshare(s host, reason string) {
 		s.unset("wait_" + hex)
 		s.wake(hex)
 	}
-	for _, g := range append(guests(s), pairs(s)...) {
-		pid := -g.pid
-		if g.pair {
-			pid = g.pid
-		}
-		if err := syscall.Kill(pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
+	for _, g := range guests(s) {
+		if err := syscall.Kill(-g.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
 			fatalf("hanging up %s: %v", g.name, err)
 		}
 	}
+	endPairs(s, syscall.SIGHUP)
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && len(s.opts("pid_")) > 0; {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -374,7 +371,7 @@ func unshare(s host, reason string) {
 	for id := range s.opts("guest_") {
 		s.unset("guest_" + id)
 	}
-	for _, prefix := range []string{"invite_", "member_", "gate_", "ok_", "wait_", "bye_"} {
+	for _, prefix := range []string{"invite_", "member_", "gate_", "ok_", "wait_", "bye_", "end_"} {
 		for id := range s.opts(prefix) {
 			s.unset(prefix + id)
 		}
@@ -418,14 +415,17 @@ func cmdServe(args []string) {
 	open := map[*watchedConn]bool{}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-	if a, ok := s.(agentHost); ok {
-		go func() {
-			for a.alive() {
-				time.Sleep(2 * time.Second)
+	go func() {
+		for s.alive() {
+			time.Sleep(2 * time.Second)
+		}
+		if a, ok := s.(agentHost); ok {
+			for _, p := range pairs(a) {
+				a.set("bye_"+p.hex, "The host's agent exited.")
 			}
-			stop <- syscall.SIGTERM
-		}()
-	}
+		}
+		stop <- syscall.SIGTERM
+	}()
 	go shutdown(s, srv, stop, &mu, open, logger)
 	go expireLoop(s, logger)
 	for {
@@ -452,12 +452,15 @@ func cmdServe(args []string) {
 
 func shutdown(s host, srv *tailcat.Server, stop chan os.Signal, mu *sync.Mutex, open map[*watchedConn]bool, logger *log.Logger) {
 	logger.Printf("shutting down on %v", <-stop)
+	if s.alive() {
+		endPairs(s, syscall.SIGTERM)
+	}
 	count := func() int {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(open)
 	}
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline) && count() > 0; {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && count() > 0; {
 		time.Sleep(50 * time.Millisecond)
 	}
 	mu.Lock()
@@ -517,6 +520,22 @@ func (w *watchedConn) expire(after time.Duration) {
 var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 func connID(remote string) string { return nonAlnum.ReplaceAllString(remote, "_") }
+
+func endPairs(s host, sig syscall.Signal) {
+	var running []entry
+	for _, p := range pairs(s) {
+		if p.pid > 0 && processRunning(p.pid, p.start) {
+			if err := syscall.Kill(p.pid, sig); err != nil && err != syscall.ESRCH {
+				fatalf("ending pairing with %s: %v", p.name, err)
+			}
+			running = append(running, p)
+		}
+	}
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline) && len(running) > 0; {
+		time.Sleep(50 * time.Millisecond)
+		running = slices.DeleteFunc(running, func(p entry) bool { return !processRunning(p.pid, p.start) })
+	}
+}
 
 func hangUp(s host, remote string, logger *log.Logger) {
 	id := connID(remote)

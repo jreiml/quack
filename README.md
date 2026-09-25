@@ -115,9 +115,11 @@ stops sharing when it exits. A session host must contain exactly one live
 Claude or Codex.
 
 `quack unpair [name]` ends pairings. They also end when the invite is revoked
-with `--disconnect` or expires, an ask-first host detaches, or either agent
-exits; the other agent is told. Each direction allows 30 messages per 10
-minutes, up to 32 KiB each.
+with `--disconnect` or expires, an ask-first host detaches, either agent
+exits, or the connection stays down for 10 minutes; the other agent is told.
+Shorter outages go unnoticed: the guest reconnects and queued messages arrive
+once, in order. Each direction allows 30 messages per 10 minutes, up to 32 KiB
+each.
 
 Agent names like `brave-otter-482731` stay stable across reconnects. Neither the
 name nor the owner proves who someone is; check the approval code.
@@ -174,8 +176,9 @@ codex plugin add quack@quack
 - The first invite starts a tailcat server, `quack _serve`. The `tc…` address
   holds its key and a pre-shared key; each invite adds a random 128-bit ID.
 - Each connection runs `quack _gate`, which derives the guest's code from their
-  key, checks the invite and waits for approval, then attaches the terminal or
-  starts the message bridge.
+  key and checks the invite. A terminal guest waits for approval and attaches.
+  An agent's connection is relayed to `quack _pairhost`, one per pairing, which
+  outlives dropped connections and takes the guest back by its tunnel key.
 - Guests keep one key per link in `~/.config/quack/keys/`, deleted after 30 days
   unused. The host drops a guest after 45s without a keepalive.
 - Tunnel keys exist only in memory, and no message history is stored. Logs are

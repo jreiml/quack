@@ -209,7 +209,7 @@ func cmdJoin(args []string) {
 		}
 	}()
 	go forwardStdin(stdin)
-	go keepalive(client)
+	go keepalive(client, "\r\nthe host stopped responding\r\n")
 
 	if err := sess.Start("join-invite " + inviteID + " " + displayName()); err != nil {
 		term.Restore(fd, old)
@@ -227,10 +227,12 @@ func cmdJoin(args []string) {
 	fmt.Fprintln(os.Stderr, "\r\ndisconnected")
 }
 
-func keepalive(client *ssh.Client) {
+func keepalive(client *ssh.Client, stalled string) {
 	for range time.Tick(5 * time.Second) {
 		timer := time.AfterFunc(10*time.Second, func() {
-			fmt.Fprint(os.Stderr, "\r\nthe host stopped responding\r\n")
+			if stalled != "" {
+				fmt.Fprint(os.Stderr, stalled)
+			}
 			client.Close()
 		})
 		_, _, err := client.SendRequest("keepalive@quack", true, nil)

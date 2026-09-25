@@ -222,7 +222,7 @@ func disconnectEntry(e entry, reason string) {
 	e.s.unset("ok_" + e.hex)
 	e.s.unset("wait_" + e.hex)
 	e.s.wake(e.hex)
-	if e.pair && e.pid > 0 {
+	if e.pair && e.pid > 0 && processRunning(e.pid, e.start) {
 		if err := syscall.Kill(e.pid, syscall.SIGHUP); err != nil && err != syscall.ESRCH {
 			fatalf("disconnecting %s: %v", e.name, err)
 		}
@@ -361,6 +361,18 @@ func pruneInvitesLocked(s host) bool {
 			}
 		}
 		changed = true
+	}
+	reaped := false
+	for id := range s.opts("pair_") {
+		if _, ok := pairWorker(s, id); !ok {
+			for _, prefix := range []string{"pair_", "wait_", "ok_", "bye_", "member_"} {
+				s.unset(prefix + id)
+			}
+			changed, reaped = true, true
+		}
+	}
+	if reaped {
+		sweepPairSockets()
 	}
 	for _, e := range connections(s) {
 		busy[e.hex] = true

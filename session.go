@@ -267,7 +267,7 @@ func (i *info) describeAccess() {
 		}
 	}
 	for _, p := range pairs(i.s) {
-		if p.state == "active" {
+		if p.state == "active" || p.state == "offline" {
 			i.pairs++
 		}
 	}
