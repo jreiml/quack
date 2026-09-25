@@ -1,0 +1,19 @@
+{
+  "name": "quack",
+  "interface": {
+    "displayName": "quack"
+  },
+  "plugins": [
+    {
+      "name": "quack",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

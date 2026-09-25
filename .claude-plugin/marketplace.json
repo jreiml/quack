@@ -1,0 +1,15 @@
+{
+  "name": "quack",
+  "description": "quack's Claude Code plugin",
+  "owner": {
+    "name": "Johanna Reiml",
+    "email": "johanna@reiml.dev"
+  },
+  "plugins": [
+    {
+      "name": "quack",
+      "source": "./plugin",
+      "description": "Set up quack and work with paired Claude and Codex sessions"
+    }
+  ]
+}

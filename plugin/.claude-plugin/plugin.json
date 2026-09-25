@@ -1,0 +1,13 @@
+{
+  "name": "quack",
+  "version": "0.1.1",
+  "description": "Set up quack and work with paired Claude and Codex sessions",
+  "author": {
+    "name": "Johanna Reiml",
+    "email": "johanna@reiml.dev"
+  },
+  "homepage": "https://github.com/jreiml/quack",
+  "repository": "https://github.com/jreiml/quack",
+  "license": "MIT",
+  "keywords": ["tmux", "pairing", "collaboration", "terminal-sharing"]
+}
