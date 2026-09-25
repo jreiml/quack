@@ -138,6 +138,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Setenv("TMUX_TMPDIR", dir)
+	os.Setenv("SSH_CONNECTION", "quack-test")
 	os.Unsetenv("QUACK_SESSION")
 	os.Unsetenv("TMUX")
 	code := m.Run()
@@ -199,9 +200,7 @@ func TestSessions(t *testing.T) {
 func TestSessionEndsWithCommand(t *testing.T) {
 	s := server{quack(t, "new", "-n", "t-short", "--", "sleep", "1")}
 	eventually(t, "session to end", func() bool { return !s.alive() })
-	if s.cmd("list-sessions").Run() == nil {
-		t.Errorf("tmux server survived its command")
-	}
+	eventually(t, "tmux server to exit", func() bool { return s.cmd("list-sessions").Run() != nil })
 }
 
 func TestTerminalClose(t *testing.T) {

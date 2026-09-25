@@ -292,6 +292,12 @@ type localFrame struct {
 
 var crossMessage = regexp.MustCompile(`(?s)^<cross-session-message(?: [^<>\n]*)?>\n(.*)\n</cross-session-message>$`)
 
+var crossTag = regexp.MustCompile(`(?i)<(\s*/?\s*)cross-session-message`)
+
+func envelopeText(text string) string {
+	return crossTag.ReplaceAllString(text, "&lt;${1}cross-session-message")
+}
+
 func messageBody(content string) string {
 	if m := crossMessage.FindStringSubmatch(content); m != nil {
 		return m[1]
@@ -341,7 +347,7 @@ func (a claudeEndpoint) send(from, name, text string) error {
 	}
 	frame := localFrame{Type: "user", Version: 1, ID: randomID(), Priority: "next"}
 	frame.Message.Role = "user"
-	frame.Message.Content = fmt.Sprintf("<cross-session-message from=\"uds:%s\" from-name=\"%s\" from-mode=\"bypass\">\n%s\n</cross-session-message>", from, strings.NewReplacer("\"", "", "<", "", ">", "", "\n", " ", "\r", " ").Replace(name), text)
+	frame.Message.Content = fmt.Sprintf("<cross-session-message from=\"uds:%s\" from-name=\"%s\" from-mode=\"bypass\">\n%s\n</cross-session-message>", from, strings.NewReplacer("\"", "", "<", "", ">", "", "\n", " ", "\r", " ").Replace(name), envelopeText(text))
 	if err := enc.Encode(frame); err != nil {
 		return err
 	}

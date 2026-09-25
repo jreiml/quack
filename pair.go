@@ -111,13 +111,48 @@ func pairPrompt(b *pairInbox) string {
 	return fmt.Sprintf("You can collaborate with %s, an agent session belonging to %s. Your humans are working together. Continue your current task. %s when a relevant question, finding, or coordination need comes up. Pairing itself requires no introduction or investigation. If you have no task, wait for your human’s direction. Only messages you send there are shared. Run quack unpair %q to disconnect. You’ll be notified when the pairing ends.", peer.Name, peer.Owner, instruction, b.record.Name)
 }
 
-func pairNotice(b *pairInbox, peer, text string) {
+func pairNotice(b *pairInbox, peer, text string) error {
 	name := "quack"
 	if b.record.Identity.valid() {
 		name = b.record.Identity.label()
 	}
-	if err := b.record.send(name, text); err != nil {
+	err := b.record.send(name, text)
+	if err != nil {
 		b.logger.Printf("pair notice to %s: %v", peer, err)
+	}
+	return err
+}
+
+func pairEnded(text string) string {
+	return "Pairing ended: " + strings.Join(strings.Fields(text), " ")
+}
+
+func pairGoodbye(p *pairWire, fallback string) string {
+	deadline := time.After(250 * time.Millisecond)
+	for {
+		select {
+		case f := <-p.in:
+			if f.Type == "bye" {
+				return pairEnded(f.Text)
+			}
+		case <-p.errors:
+			return fallback
+		case <-deadline:
+			return fallback
+		}
+	}
+}
+
+func pairDrain(p *pairWire, limit time.Duration) {
+	deadline := time.After(limit)
+	for {
+		select {
+		case <-p.in:
+		case <-p.errors:
+			return
+		case <-deadline:
+			return
+		}
 	}
 }
 
@@ -135,11 +170,11 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 				return "The peer ended the pairing."
 			default:
 			}
-			return "The pairing was stopped."
+			return pairGoodbye(p, "The pairing was stopped.")
 		case <-b.stop:
 			return "The peer ended the pairing."
 		case <-tick.C:
-			if err := b.record.alive(); err != nil {
+			if err := b.record.alive(); errors.Is(err, errAgentGone) {
 				if b.record.Codex != nil {
 					return "The peer's Codex session exited."
 				}
@@ -177,7 +212,7 @@ func bridgePair(ctx context.Context, b *pairInbox, p *pairWire, peer string, che
 		case f := <-p.in:
 			switch f.Type {
 			case "bye":
-				return "Pairing ended: " + strings.Join(strings.Fields(f.Text), " ")
+				return pairEnded(f.Text)
 			case "limit":
 				if time.Since(receivedNotice) >= 10*time.Minute {
 					pairNotice(b, peer, "Quack did not deliver your message: the peer's incoming limit of 30 messages per 10 minutes was reached. Do not retry automatically.")
@@ -220,10 +255,20 @@ type pairConfig struct {
 	Codex    *codexEndpoint  `json:"codex,omitempty"`
 }
 
+func refuseCodexSandbox(err error, command string) {
+	if os.Getenv("CODEX_SANDBOX") == "" && (err == nil || os.Getenv("CODEX_THREAD_ID") == "" || !errors.Is(err, os.ErrPermission)) {
+		return
+	}
+	fatalf("Codex's sandbox blocks this: quack needs the network, process lookup and ~/.codex/quack-pairs. Rerun this exact command outside the sandbox (request escalated permissions), or ask your human to type it in the Codex prompt as: ! %s", command)
+}
+
 func cmdPair(args []string) {
 	addr, inviteID := splitInviteLink(parseLink(args))
+	command := "quack pair " + addr + "/" + inviteID
+	refuseCodexSandbox(nil, command)
 	a, codex, err := callerAgent()
 	if err != nil {
+		refuseCodexSandbox(err, command)
 		fatalf("%v", err)
 	}
 	identity, err := agentSessionIdentity(a, codex, displayName())
@@ -262,7 +307,7 @@ func cmdPair(args []string) {
 	}
 	var status pairFrame
 	err = json.NewDecoder(control).Decode(&status)
-	printed := err == nil && status.Type == "ready"
+	printed := err == nil && (status.Type == "ready" || status.Type == "error")
 	if err := json.NewEncoder(control).Encode(printed); err != nil {
 		fatalf("pair startup: %v", err)
 	}
@@ -338,8 +383,9 @@ func cmdPairWorker(args []string) {
 		}
 		return <-printed
 	}
-	reason := runPairClient(ctx, cfg, b, report)
-	pairNotice(b, b.record.Peer, reason)
+	if reason := runPairClient(ctx, cfg, b, report); reason != "" {
+		pairNotice(b, b.record.Peer, reason)
+	}
 }
 
 func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report func(pairFrame) bool) string {
@@ -350,7 +396,9 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 	cancel()
 	fail := func(err error) string {
 		text := "Could not pair: " + err.Error()
-		report(pairFrame{Type: "error", Text: text})
+		if report(pairFrame{Type: "error", Text: text}) {
+			return ""
+		}
 		return text
 	}
 	if err != nil {
@@ -410,7 +458,7 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 		case <-ctx.Done():
 			return fail(fmt.Errorf("pairing cancelled"))
 		case <-tick.C:
-			if err := b.record.alive(); err != nil {
+			if err := b.record.alive(); errors.Is(err, errAgentGone) {
 				return fail(err)
 			}
 		case err := <-p.errors:
@@ -430,12 +478,22 @@ func runPairClient(ctx context.Context, cfg pairConfig, b *pairInbox, report fun
 				}
 				prompt := pairPrompt(b)
 				if !report(pairFrame{Type: "ready", Text: prompt}) {
-					pairNotice(b, peer, prompt)
+					if err := pairNotice(b, peer, prompt); err != nil {
+						reason := "The peer's agent could not receive messages: " + err.Error()
+						if err := p.send(pairFrame{Type: "bye", Text: reason}); err != nil {
+							b.logger.Printf("pair goodbye: %v", err)
+						}
+						return reason
+					}
 				}
 				reason := bridgePair(ctx, b, p, peer, nil)
 				if err := p.send(pairFrame{Type: "bye", Text: reason}); err != nil {
 					b.logger.Printf("pair goodbye: %v", err)
 				}
+				if err := in.Close(); err != nil {
+					b.logger.Printf("pair close: %v", err)
+				}
+				pairDrain(p, 2*time.Second)
 				return reason
 			default:
 				return fail(fmt.Errorf("unsupported pair handshake"))
@@ -474,6 +532,10 @@ func pairGate(s server, pub, who, inviteID string) {
 	}
 	a, codex, err := hostAgent(s)
 	if err != nil {
+		logger.Printf("%s's agent could not pair: %v", who, err)
+		if err := notify(fmt.Sprintf("%s's agent could not pair: %v", who, err)); err != nil {
+			logger.Printf("notify: %v", err)
+		}
 		goodbye(err.Error())
 		return
 	}
@@ -546,7 +608,7 @@ func pairGate(s server, pub, who, inviteID string) {
 				reason = pairEndReason(s, id, "The host declined.")
 			}
 			if reason == "" {
-				if err := b.record.alive(); err != nil {
+				if err := b.record.alive(); errors.Is(err, errAgentGone) {
 					reason = "The host's agent exited."
 				}
 			}
@@ -567,7 +629,11 @@ func pairGate(s server, pub, who, inviteID string) {
 		return
 	}
 	logger.Printf("%s's agent (%s) paired", who, code)
-	pairNotice(b, who, pairPrompt(b))
+	if err := pairNotice(b, who, pairPrompt(b)); err != nil {
+		logger.Printf("%s's agent (%s): host agent cannot receive messages: %v", who, code, err)
+		goodbye("The host's agent could not receive messages: " + err.Error())
+		return
+	}
 	reason = bridgePair(ctx, b, p, who, func() string {
 		if !s.alive() {
 			return "The host ended the session."
@@ -580,7 +646,7 @@ func pairGate(s server, pub, who, inviteID string) {
 		}
 		return ""
 	})
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && !strings.HasPrefix(reason, pairEnded("")) {
 		reason = pairEndReason(s, id, "The host ended the session.")
 	}
 	logger.Printf("%s's agent (%s): %s", who, code, reason)
@@ -599,8 +665,11 @@ func cmdUnpair(args []string) {
 	if len(args) > 1 {
 		fatalf("usage: quack unpair [name]")
 	}
+	command := strings.Join(append([]string{"quack", "unpair"}, args...), " ")
+	refuseCodexSandbox(nil, command)
 	caller, codex, callerErr := callerAgent()
 	if callerErr != nil && os.Getenv("CODEX_THREAD_ID") != "" {
+		refuseCodexSandbox(callerErr, command)
 		fatalf("%v", callerErr)
 	}
 	home := codexHome()
