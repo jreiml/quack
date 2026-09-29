@@ -54,7 +54,7 @@ func TestNetShareJoin(t *testing.T) {
 
 	g.tmux("new-session", "-d", "-s", "host", "-x", "100", "-y", "30", bin+" attach t-net")
 	eventually(t, "host to attach", func() bool { return strings.TrimSpace(s.must("list-clients", "-t", "=main")) != "" })
-	quack(t, "invite", "new", "terminal", "-n", "t-net")
+	quack(t, "invite", "new", "terminal", "--ask", "-n", "t-net")
 	addr := inviteLinkForTest(t, s, "join")
 	if !strings.HasPrefix(addr, "tc") {
 		t.Fatalf("addr = %q", addr)
@@ -138,7 +138,7 @@ func TestNetShareJoin(t *testing.T) {
 	newKey()
 	g.tmux("new-session", "-d", "-s", "host-again", "-x", "100", "-y", "30", bin+" attach "+s.name)
 	eventually(t, "host reattached", func() bool { return hostAttached(s) })
-	quack(t, "invite", "new", "terminal", "-n", s.name)
+	quack(t, "invite", "new", "terminal", "--ask", "-n", s.name)
 	addr = inviteLinkForTest(t, s, "join")
 	g.join(addr)
 	eventually(t, "second guest to wait once the limit is used", func() bool { return len(waiting(s)) == 1 })
@@ -165,7 +165,7 @@ func TestNetTwoJoinsFromOneMachine(t *testing.T) {
 	eventually(t, "first join to be auto-approved", func() bool { return attached(s) })
 	g.tmux("new-session", "-d", "-s", "host", "-x", "100", "-y", "30", bin+" attach "+s.name)
 	eventually(t, "host attached", func() bool { return hostAttached(s) })
-	quack(t, "invite", "new", "terminal", "-n", s.name)
+	quack(t, "invite", "new", "terminal", "--ask", "-n", s.name)
 	addr = inviteLinkForTest(t, s, "join")
 	g.tmux("new-session", "-d", "-s", "g2", "-x", "100", "-y", "30", bin+" join "+addr+"; sleep 120")
 	eventually(t, "second join to wait", func() bool { return len(waiting(s)) == 1 })

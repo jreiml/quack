@@ -136,7 +136,7 @@ func parseInviteFlags(args []string, allowed ...string) (inviteFlags, []string) 
 }
 
 const inviteUsage = `usage:
-  quack invite new terminal|agent [-n session] [--auto-approve [--limit N]] [--expires 2h|never]
+  quack invite new terminal|agent [-n session] [--ask | --auto-approve [--limit N]] [--expires 2h|never]
   quack invite ls [-n session]
   quack invite set <id> --ask | --auto-approve [--limit N] [--expires 2h|never]
   quack invite revoke <id> [--disconnect]
@@ -166,10 +166,13 @@ func cmdInvite(args []string) {
 func cmdInviteNew(args []string) {
 	kinds := map[string]string{"terminal": "join", "agent": "pair"}
 	if len(args) == 0 || kinds[args[0]] == "" {
-		fatalf("usage: quack invite new terminal|agent [-n session] [--auto-approve [--limit N]] [--expires 2h|never]")
+		fatalf("usage: quack invite new terminal|agent [-n session] [--ask | --auto-approve [--limit N]] [--expires 2h|never]")
 	}
 	kind := kinds[args[0]]
-	f, rest := parseInviteFlags(args[1:], "-n", "--auto-approve", "--limit", "--expires")
+	f, rest := parseInviteFlags(args[1:], "-n", "--ask", "--auto-approve", "--limit", "--expires")
+	if !f.ask && !f.auto {
+		f.auto, f.limit = true, 1
+	}
 	if len(rest) > 0 {
 		fatalf("unexpected %q; choose a session with -n", rest[0])
 	}

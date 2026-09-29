@@ -366,7 +366,7 @@ func TestDetachedAskFirst(t *testing.T) {
 	defer s.run("kill-server")
 	s.must("new-session", "-d", "-s", "_serve", "--", "sleep", "300")
 	auto := createInvite(s, "join", 0, 0)
-	for _, args := range [][]string{{"invite", "new", "terminal", "-n", s.name}, {"invite", "set", auto.ID, "--ask"}} {
+	for _, args := range [][]string{{"invite", "new", "terminal", "--ask", "-n", s.name}, {"invite", "set", auto.ID, "--ask"}} {
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "attached host") {
 			t.Fatalf("%v: %v %s", args, err, out)

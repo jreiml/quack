@@ -15,8 +15,9 @@ The host creates an agent invite and the other side joins with
 `quack pair <link>`, which connects the agent that runs it. If approval is
 needed, `quack pair` prints a two-word code for the host to check.
 
-- To host from the agent you're in, run `quack invite new agent` (add
-  `--auto-approve --limit 1` for one use without approval). It works in any
+- To host from the agent you're in, run `quack invite new agent`. Like
+  `quack invite new terminal`, by default it admits one guest without approval. Add `--ask` only if the human asks for
+  approval, or `--auto-approve --limit N` for more guests. It works in any
   local Claude Code, or in a Codex CLI session that owns its thread, without a
   quack session. Inside a quack session the human can also use `Ctrl-Q c`.
 - Desktop, App Server and shared-daemon Codex sessions can't pair; `quack codex`

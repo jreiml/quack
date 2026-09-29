@@ -526,7 +526,7 @@ func TestNetPair(t *testing.T) {
 	defer exec.Command(tmuxBin(), "-S", g.sock, "kill-server").Run()
 	g.tmux("new-session", "-d", "-s", "host", "-x", "120", "-y", "30", bin+" attach "+s.name)
 	eventually(t, "host attached", func() bool { return hostAttached(s) })
-	quack(t, "invite", "new", "agent", "-n", s.name)
+	quack(t, "invite", "new", "agent", "--ask", "-n", s.name)
 	addr := inviteLinkForTest(t, s, "pair")
 	started := time.Now()
 	result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
@@ -579,7 +579,7 @@ func TestNetPair(t *testing.T) {
 	if consumed.State != "consumed" {
 		t.Fatal("pair did not consume one-time spot")
 	}
-	quack(t, "invite", "new", "agent", "-n", s.name)
+	quack(t, "invite", "new", "agent", "--ask", "-n", s.name)
 	addr = inviteLinkForTest(t, s, "pair")
 	fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: addr})
 	eventually(t, "second pair waits", func() bool { return len(waiting(s)) == 1 })

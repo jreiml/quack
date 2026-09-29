@@ -16,7 +16,8 @@ Sessions. These take over the terminal, so run them yourself:
   quack attach|detach|stop [name]     reattach, detach your terminals, or end a session
 
 Invites. -n picks the session; otherwise the current one, the only one, or ask:
-  quack invite new terminal|agent     create and copy an invite; you approve each guest
+  quack invite new terminal|agent     create and copy a one-use invite that needs no approval
+      --ask                           approve each guest by their two-word code instead
       --auto-approve [--limit N]      admit without asking, for 24h unless --expires
       --expires 2h|never              revoke and disconnect after this long
   quack invite ls                     list invites

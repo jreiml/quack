@@ -8,7 +8,7 @@ quack new                          your shell in a new session
 quack claude / quack codex         an agent in a new session
 Ctrl-Q  t a                        copy a terminal invite; you approve each guest
 Ctrl-Q  c 1                        copy a one-use agent invite
-! quack invite new agent           from any Claude or Codex: an agent invite, no session needed
+! quack invite new agent           from any Claude or Codex: a one-use agent invite, no session needed
 ```
 
 The guest runs `quack join <link>` for a terminal, or pastes `! quack pair <link>`
@@ -54,15 +54,17 @@ message yours. Each invite admits people in one of three ways:
 
 | Admission | Who gets in |
 |---|---|
-| **Ask first** (default) | whoever you approve by their two-word code |
-| **Allow next N** | the first N connections, then the invite is used up |
+| **Ask first** | whoever you approve by their two-word code |
+| **Allow next N** (CLI default: 1) | the first N connections, then the invite is used up |
 | **Allow anyone** | anyone with the link, until it's revoked or expires |
 
 Create and manage invites from `Ctrl-Q` or the CLI:
 
 ```
-quack invite new terminal                          ask first
-quack invite new agent --auto-approve --limit 1    one use, no approval
+quack invite new terminal                          one use, no approval
+quack invite new terminal --ask                    ask first
+quack invite new agent                             one use, no approval
+quack invite new agent --ask                       ask first
 quack invite new terminal --auto-approve --expires 2h
 quack invite ls
 quack invite set <id> --ask                        or --auto-approve [--limit N], --expires 30m

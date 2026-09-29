@@ -91,6 +91,9 @@ func TestInviteCLI(t *testing.T) {
 			t.Fatalf("invite ls missing %q:\n%s", want, ls)
 		}
 	}
+	if i, _ := loadInvite(s, newInvite("agent", "-n", s.name)); i.Admission != "limited" || i.Remaining != 1 {
+		t.Fatalf("default agent invite: %+v", i)
+	}
 	quack(t, "invite", "set", agent[:6], "--auto-approve", "--limit", "3", "--expires", "never")
 	if i, _ := loadInvite(s, agent); i.Admission != "limited" || i.Remaining != 3 || i.Expires != 0 {
 		t.Fatalf("set: %+v", i)
@@ -139,7 +142,7 @@ func TestNetAgentHostPair(t *testing.T) {
 		}
 		return link
 	}
-	link := invite()
+	link := invite("--ask")
 	hs := agentHosts()
 	if len(hs) != 1 {
 		t.Fatalf("agent hosts: %v", hs)
