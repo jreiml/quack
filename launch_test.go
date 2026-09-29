@@ -1,12 +1,15 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 func TestNamedAgentLaunch(t *testing.T) {
@@ -69,19 +72,76 @@ func TestNamedAgentLaunch(t *testing.T) {
 			}
 		})
 	}
-	for _, args := range [][]string{{"new", "-n", "t-no-tty"}, {"claude", "-n", "t-no-tty"}, {"codex"}} {
-		out, err := exec.Command(bin, args...).CombinedOutput()
-		if err == nil || !strings.Contains(string(out), "no terminal here") {
-			t.Fatalf("%q: %s %v", args, out, err)
-		}
-		if (server{"t-no-tty"}).alive() {
-			t.Fatal("started a session without a terminal")
-		}
+	out, err := exec.Command(bin, "new", "-n", "t-no-tty").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "no terminal here") {
+		t.Fatalf("%s %v", out, err)
+	}
+	if (server{"t-no-tty"}).alive() {
+		t.Fatal("started a session without a terminal")
 	}
 	for _, args := range [][]string{{"claude", "-n"}, {"codex", "--name="}, {"codex", "-n", "--"}} {
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "needs a session name") {
 			t.Fatalf("%q: %s %v", args, out, err)
 		}
+	}
+}
+
+func TestAgentPassthrough(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	output := filepath.Join(root, "arguments")
+	t.Setenv("QUACK_LAUNCH_ARGS", output)
+	for _, agent := range []string{"claude", "codex"} {
+		if err := os.WriteFile(filepath.Join(root, agent), []byte("#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$QUACK_LAUNCH_ARGS\"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		title string
+		tty   bool
+		env   string
+		args  []string
+		want  []string
+	}{
+		{"no-tty-claude", false, "", []string{"claude", "-n", "t-pass", "fix it"}, []string{"--dangerously-skip-permissions", "--name", "t-pass", "fix it"}},
+		{"no-tty-codex", false, "", []string{"codex", "-n", "t-pass", "resume", "--last"}, []string{"resume", "--last"}},
+		{"inside-session", true, "t-outer", []string{"codex", "resume", "--last"}, []string{"resume", "--last"}},
+		{"print", true, "", []string{"claude", "--output-format=json", "-p", "hi"}, []string{"--dangerously-skip-permissions", "--output-format=json", "-p", "hi"}},
+		{"claude-command", true, "", []string{"claude", "mcp", "list"}, []string{"--dangerously-skip-permissions", "mcp", "list"}},
+		{"codex-exec", true, "", []string{"codex", "exec", "hi"}, []string{"exec", "hi"}},
+		{"codex-version", true, "", []string{"codex", "--version"}, []string{"--version"}},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			t.Setenv("QUACK_SESSION", tc.env)
+			if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			c := exec.Command(bin, tc.args...)
+			if tc.tty {
+				f, err := pty.Start(c)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer f.Close()
+				go io.Copy(io.Discard, f)
+				if err := c.Wait(); err != nil {
+					t.Fatal(err)
+				}
+			} else if out, err := c.CombinedOutput(); err != nil {
+				t.Fatalf("%s %v", out, err)
+			}
+			raw, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("arguments %q, want %q", got, tc.want)
+			}
+			if (server{"t-pass"}).alive() {
+				t.Fatal("started a session")
+			}
+		})
 	}
 }

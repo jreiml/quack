@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,9 @@ func cmdAgent(agent string, args []string) {
 		}
 		name = value
 	}
+	if !detach && passthrough(agent, forwarded) {
+		execAgent(agent, name, forwarded)
+	}
 	var launch []string
 	if name != "" {
 		launch = append(launch, "-n", name)
@@ -98,6 +102,44 @@ func cmdAgent(agent string, args []string) {
 		launch = append(launch, "--", agent, "--no-daemon")
 	}
 	cmdNew(append(launch, forwarded...))
+}
+
+var agentFlags = map[string][]string{
+	"claude": {"-p", "--print", "-h", "--help", "-v", "--version", "--bg", "--output-format", "--input-format"},
+	"codex":  {"-h", "--help", "-V", "--version"},
+}
+
+var agentCommands = map[string][]string{
+	"claude": strings.Fields("agents attach auth auto-mode doctor gateway import install logs mcp plugin plugins project respawn rm setup-token stop kill ultrareview update upgrade"),
+	"codex":  strings.Fields("agents exec e review login logout mcp mcp-server plugin app-server remote-control app completion update doctor sandbox debug apply a queue archive delete migrate-rollouts unarchive cloud exec-server features help"),
+}
+
+func passthrough(agent string, args []string) bool {
+	if os.Getenv("QUACK_SESSION") != "" || !isTTY() {
+		return true
+	}
+	for _, arg := range args {
+		flag, _, _ := strings.Cut(arg, "=")
+		if slices.Contains(agentFlags[agent], flag) {
+			return true
+		}
+	}
+	return len(args) > 0 && slices.Contains(agentCommands[agent], args[0])
+}
+
+func execAgent(agent, name string, args []string) {
+	bin, err := exec.LookPath(agent)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	argv := []string{agent}
+	if agent == "claude" {
+		argv = append(argv, "--dangerously-skip-permissions")
+		if name != "" {
+			argv = append(argv, "--name", name)
+		}
+	}
+	fatalf("%v", syscall.Exec(bin, append(argv, args...), os.Environ()))
 }
 
 func cmdNew(args []string) {

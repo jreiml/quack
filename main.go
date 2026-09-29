@@ -12,6 +12,7 @@ Sessions. These take over the terminal, so run them yourself:
   quack claude [-n name] [args...]    Claude with --dangerously-skip-permissions
   quack codex [-n name] [args...]     Codex with --no-daemon (QUACK_CODEX_NATIVE=1: own app server)
       --detach                        start in the background and print the name
+      no terminal, inside a session, -p, exec, review, mcp, ...: run the agent directly
   quack ls                            list sessions and agent hosts
   quack attach|detach|stop [name]     reattach, detach your terminals, or end a session
 

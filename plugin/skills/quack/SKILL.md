@@ -23,7 +23,8 @@ needed, `quack pair` prints a two-word code for the host to check.
 - Desktop, App Server and shared-daemon Codex sessions can't pair; `quack codex`
   or `codex --no-daemon` can.
 - `quack new`, `quack claude` and `quack codex` attach a terminal, so the human
-  runs them. From a shell tool they need `--detach`.
+  runs them. From a shell tool they need `--detach`; without it, `quack claude`
+  and `quack codex` just run the agent directly, with no session.
 - In Codex's sandbox, `quack send` works, but `quack pair` and `quack invite`
   don't. Run them with escalated permissions or have the human type them with
   `!`.

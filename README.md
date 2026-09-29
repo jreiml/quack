@@ -30,7 +30,7 @@ binary from [releases](https://github.com/jreiml/quack/releases) or run
 A session is a command running in its own tmux server. `quack new`,
 `quack claude` and `quack codex` start one and attach your terminal, so run
 them yourself. Without a terminal (for example, from an agent's shell tool)
-they need `--detach`.
+`quack new` needs `--detach`.
 
 ```
 quack new -n build -- make watch         any command (default $SHELL)
@@ -41,6 +41,16 @@ quack codex -n auth-fix                  Codex with --no-daemon, so quack can fi
 `-n` names the session; Claude also uses it for its conversation. Other
 arguments go to the agent, and `--` passes `-n` through. For Claude with its
 permission prompts, use `quack new -- claude`.
+
+`quack claude` and `quack codex` run the agent directly, without a session,
+when there is no terminal, inside a quack session, or for one-shot
+invocations such as `-p`, `--version`, `claude mcp`, `codex exec` or
+`codex review`. So they work as drop-in replacements:
+
+```
+alias claude='quack claude'
+alias codex='quack codex'
+```
 
 `Ctrl-Q` opens the menu and `Ctrl-Q q` detaches. `quack ls`, `quack attach`,
 `quack detach` and `quack stop` manage sessions. Without a name they use the
