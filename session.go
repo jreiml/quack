@@ -92,10 +92,7 @@ func cmdAgent(agent string, args []string) {
 		launch = append(launch, "--detach")
 	}
 	if agent == "claude" {
-		launch = append(launch, "--", agent, "--dangerously-skip-permissions")
-		if name != "" {
-			launch = append(launch, "--name", name)
-		}
+		launch = append(append(launch, "--", agent), claudeFlags(name, forwarded, true)...)
 	} else if codexNative() {
 		launch = append(launch, "--", quackBin(), "_codex")
 	} else {
@@ -134,12 +131,20 @@ func execAgent(agent, name string, args []string) {
 	}
 	argv := []string{agent}
 	if agent == "claude" {
-		argv = append(argv, "--dangerously-skip-permissions")
-		if name != "" {
-			argv = append(argv, "--name", name)
-		}
+		argv = append(argv, claudeFlags(name, args, false)...)
 	}
 	fatalf("%v", syscall.Exec(bin, append(argv, args...), os.Environ()))
+}
+
+func claudeFlags(name string, args []string, session bool) []string {
+	flags := []string{"--dangerously-skip-permissions"}
+	if name != "" {
+		flags = append(flags, "--name", name)
+	}
+	if session && !slices.ContainsFunc(args, func(arg string) bool { return arg == "--settings" || strings.HasPrefix(arg, "--settings=") }) {
+		flags = append(flags, "--settings", `{"crossSessionInbound":"accept"}`)
+	}
+	return flags
 }
 
 func cmdNew(args []string) {

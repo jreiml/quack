@@ -142,15 +142,20 @@ name nor the owner proves who someone is; check the approval code.
 **Claude.** quack uses Claude Code's local messaging socket (checked against
 2.1.281). A pairing belongs to the Claude process, not a conversation.
 Messages are marked `from-mode="bypass"`: `quack claude` delivers them right
-away, but a Claude in a prompting mode such as auto holds each one until you
-approve it. To deliver them without asking, start that Claude with
+away, also after you switch it to another permission mode, since it starts
+Claude with `--settings '{"crossSessionInbound":"accept"}'` unless you pass
+your own `--settings`. A plain Claude in a prompting mode such as auto holds each
+one until you approve it. To deliver them without asking, start that Claude with
 `claude --settings '{"crossSessionInbound":"accept"}'`, or set **Messages from
 your other sessions** to accept in `/config` for every session. Either accepts
 messages from all your other sessions, not just quack.
 
 **Codex.** `quack codex` runs Codex on its own app server (tested with
 0.163.0) and passes `-c`, `--enable` and `--disable` to the server too;
-`--profile` isn't supported. Messages arrive the way Codex's own
+`--profile` isn't supported. Permission flags such as
+`--dangerously-bypass-approvals-and-sandbox`, `--sandbox` and `--ask-for-approval`
+are applied on the server; with `resume` they go only there, because Codex
+refuses permission overrides when a remote TUI resumes a thread. Messages arrive the way Codex's own
 `send_message_to_thread` delivers them, shown as "Sent by Codex from task <peer>
 via quack": an idle Codex starts a turn at once, a busy one reads them in its
 current turn. The app server's socket is in `QUACK_CODEX_SOCKET`, so other

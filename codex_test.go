@@ -824,3 +824,21 @@ func TestCodexWrapperStopsServerOnSignalDuringStartup(t *testing.T) {
 		t.Fatalf("app server %d survived: %v", pid, err)
 	}
 }
+
+func TestCodexArgs(t *testing.T) {
+	server, tui := codexArgs([]string{"--dangerously-bypass-approvals-and-sandbox", "-C", "/w", "-c", "model_auto_compact_token_limit=1", "--sandbox", "read-only", "hi"})
+	wantServer := []string{"-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`, "-c", "model_auto_compact_token_limit=1", "-c", `sandbox_mode="read-only"`}
+	if !reflect.DeepEqual(server, wantServer) {
+		t.Fatalf("server %q", server)
+	}
+	if want := []string{"--dangerously-bypass-approvals-and-sandbox", "-C", "/w", "-c", "model_auto_compact_token_limit=1", "--sandbox", "read-only", "hi"}; !reflect.DeepEqual(tui, want) {
+		t.Fatalf("tui %q", tui)
+	}
+	server, tui = codexArgs([]string{"--dangerously-bypass-approvals-and-sandbox", "-c", `approval_policy="never"`, "--disable", "hooks", "-C", "/w", "resume", "01a0", "go on"})
+	if want := []string{"-c", `approval_policy="never"`, "-c", `sandbox_mode="danger-full-access"`, "-c", `approval_policy="never"`, "--disable", "hooks"}; !reflect.DeepEqual(server, want) {
+		t.Fatalf("resume server %q", server)
+	}
+	if want := []string{"--disable", "hooks", "-C", "/w", "resume", "01a0", "go on"}; !reflect.DeepEqual(tui, want) {
+		t.Fatalf("resume tui %q", tui)
+	}
+}

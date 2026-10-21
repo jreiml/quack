@@ -35,6 +35,7 @@ func TestNamedAgentLaunch(t *testing.T) {
 		{"codex", []string{"codex", "--model", "gpt-6-astra", "--name=t-native-codex"}, "t-native-codex", []string{"--remote", "unix://" + filepath.Join(socketDir(), "codex-*.sock"), "--no-alt-screen", "--model", "gpt-6-astra"}},
 		{"separator", []string{"claude", "--name", "t-named-separator", "--", "-n", "inner-name", "--settings", settings}, "t-named-separator", []string{"--dangerously-skip-permissions", "--name", "t-named-separator", "-n", "inner-name", "--settings", settings}},
 		{"agent-only-name", []string{"codex", "--no-alt-screen", "--", "--name", "inner-name"}, "", []string{"--no-daemon", "--no-alt-screen", "--name", "inner-name"}},
+		{"claude-accepts-peers", []string{"claude", "-n", "t-peers-claude"}, "t-peers-claude", []string{"--dangerously-skip-permissions", "--name", "t-peers-claude", "--settings", `{"crossSessionInbound":"accept"}`}},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
 			if tc.title != "codex" {

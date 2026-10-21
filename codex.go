@@ -530,29 +530,82 @@ func readPairRecords(homes ...string) ([]pairRecord, error) {
 	return records, nil
 }
 
-func codexServerArgs(args []string) []string {
-	var out []string
-	for n := 0; n < len(args); n++ {
-		arg := args[n]
+var codexPermissions = map[string][]string{
+	"--dangerously-bypass-approvals-and-sandbox": {`approval_policy="never"`, `sandbox_mode="danger-full-access"`},
+	"--yolo":      {`approval_policy="never"`, `sandbox_mode="danger-full-access"`},
+	"--full-auto": {`approval_policy="on-request"`, `sandbox_mode="workspace-write"`},
+}
+
+var codexPermissionValues = map[string]string{
+	"-s": "sandbox_mode", "--sandbox": "sandbox_mode",
+	"-a": "approval_policy", "--ask-for-approval": "approval_policy",
+}
+
+func permissionKey(config string) bool {
+	key, _, _ := strings.Cut(config, "=")
+	key = strings.TrimSpace(key)
+	return key == "approval_policy" || key == "sandbox_mode"
+}
+
+func codexArgs(args []string) (server, tui []string) {
+	resume := false
+	for _, arg := range args {
 		if arg == "--" {
 			break
 		}
-		name, _, inline := strings.Cut(arg, "=")
+		resume = resume || arg == "resume"
+	}
+	for n := 0; n < len(args); n++ {
+		arg := args[n]
+		if arg == "--" {
+			tui = append(tui, args[n:]...)
+			break
+		}
+		name, value, inline := strings.Cut(arg, "=")
+		if !inline && n+1 < len(args) {
+			value = args[n+1]
+		}
 		switch {
 		case name == "-p" || name == "--profile" || strings.HasPrefix(arg, "-p") && len(arg) > 2 && !strings.HasPrefix(arg, "--"):
 			fatalf("quack codex can't use a Codex profile: the app server takes no --profile; pass its settings with -c, or run with QUACK_CODEX_NATIVE=0")
-		case name == "-c" || name == "--config" || name == "--enable" || name == "--disable":
-			if inline {
-				out = append(out, arg)
-			} else if n+1 < len(args) {
-				out = append(out, arg, args[n+1])
+		case codexPermissions[arg] != nil:
+			for _, config := range codexPermissions[arg] {
+				server = append(server, "-c", config)
+			}
+			if !resume {
+				tui = append(tui, arg)
+			}
+		case codexPermissionValues[name] != "":
+			server = append(server, "-c", fmt.Sprintf("%s=%q", codexPermissionValues[name], value))
+			if !resume {
+				tui = append(tui, arg)
+				if !inline && n+1 < len(args) {
+					tui = append(tui, args[n+1])
+				}
+			}
+			if !inline {
 				n++
 			}
+		case name == "-c" || name == "--config" || name == "--enable" || name == "--disable":
+			pair := []string{arg}
+			if !inline && n+1 < len(args) {
+				pair = append(pair, args[n+1])
+				n++
+			}
+			server = append(server, pair...)
+			if !(resume && (name == "-c" || name == "--config") && permissionKey(value)) {
+				tui = append(tui, pair...)
+			}
 		case strings.HasPrefix(arg, "-c") && !strings.HasPrefix(arg, "--"):
-			out = append(out, arg)
+			server = append(server, arg)
+			if !(resume && permissionKey(arg[2:])) {
+				tui = append(tui, arg)
+			}
+		default:
+			tui = append(tui, arg)
 		}
 	}
-	return out
+	return server, tui
 }
 
 func cmdCodex(args []string) {
@@ -564,7 +617,8 @@ func cmdCodex(args []string) {
 	if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 		fatalf("%v", err)
 	}
-	server := exec.Command(bin, append([]string{"app-server", "--listen", "unix://" + socket}, codexServerArgs(args)...)...)
+	serverArgs, tuiArgs := codexArgs(args)
+	server := exec.Command(bin, append([]string{"app-server", "--listen", "unix://" + socket}, serverArgs...)...)
 	server.Env = append(os.Environ(), "QUACK_CODEX_SOCKET="+socket)
 	server.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	signals := make(chan os.Signal, 1)
@@ -603,7 +657,7 @@ func cmdCodex(args []string) {
 			fatalf("Codex app server did not listen on %s", socket)
 		}
 	}
-	tui := exec.Command(bin, append(append([]string{"--remote", "unix://" + socket}, inline(args)...), args...)...)
+	tui := exec.Command(bin, append(append([]string{"--remote", "unix://" + socket}, inline(tuiArgs)...), tuiArgs...)...)
 	tui.Stdin, tui.Stdout, tui.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := tui.Start(); err != nil {
 		stop()
