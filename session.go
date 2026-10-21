@@ -96,10 +96,10 @@ func cmdAgent(agent string, args []string) {
 		if name != "" {
 			launch = append(launch, "--name", name)
 		}
-	} else if os.Getenv("QUACK_CODEX_NATIVE") == "1" {
+	} else if codexNative() {
 		launch = append(launch, "--", quackBin(), "_codex")
 	} else {
-		launch = append(launch, "--", agent, "--no-daemon")
+		launch = append(append(launch, "--", agent, "--no-daemon"), inline(forwarded)...)
 	}
 	cmdNew(append(launch, forwarded...))
 }

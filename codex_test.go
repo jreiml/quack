@@ -654,10 +654,11 @@ func TestCodexSocket(t *testing.T) {
 		t.Fatalf("codexSocket without sockets = %q, %v", got, err)
 	}
 	fakeAppServer(t, daemon, func(string, json.RawMessage) any { return map[string]any{} })
+	t.Setenv("QUACK_CODEX_NATIVE", "0")
 	if got, err := codexSocket(os.Getpid(), home); err != nil || got != "" {
-		t.Fatalf("codexSocket without opting in = %q, %v", got, err)
+		t.Fatalf("codexSocket after opting out = %q, %v", got, err)
 	}
-	t.Setenv("QUACK_CODEX_NATIVE", "1")
+	t.Setenv("QUACK_CODEX_NATIVE", "")
 	if got, err := codexSocket(os.Getpid(), home); err != nil || got != daemon {
 		t.Fatalf("codexSocket = %q, %v; want the daemon socket", got, err)
 	}

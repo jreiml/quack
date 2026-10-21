@@ -31,14 +31,14 @@ func TestNamedAgentLaunch(t *testing.T) {
 		want  []string
 	}{
 		{"claude", []string{"claude", "-n", "t-named-claude", "--model", "opus", "--settings", settings}, "t-named-claude", []string{"--dangerously-skip-permissions", "--name", "t-named-claude", "--model", "opus", "--settings", settings}},
-		{"codex", []string{"codex", "--model", "gpt-6-astra", "--name=t-named-codex", "resume", "Ada's work"}, "t-named-codex", []string{"--no-daemon", "--model", "gpt-6-astra", "resume", "Ada's work"}},
-		{"codex-native", []string{"codex", "--model", "gpt-6-astra", "--name=t-native-codex"}, "t-native-codex", []string{"--remote", "unix://" + filepath.Join(socketDir(), "codex-*.sock"), "--model", "gpt-6-astra"}},
+		{"codex-queue", []string{"codex", "--model", "gpt-6-astra", "--name=t-named-codex", "resume", "Ada's work"}, "t-named-codex", []string{"--no-daemon", "--no-alt-screen", "--model", "gpt-6-astra", "resume", "Ada's work"}},
+		{"codex", []string{"codex", "--model", "gpt-6-astra", "--name=t-native-codex"}, "t-native-codex", []string{"--remote", "unix://" + filepath.Join(socketDir(), "codex-*.sock"), "--no-alt-screen", "--model", "gpt-6-astra"}},
 		{"separator", []string{"claude", "--name", "t-named-separator", "--", "-n", "inner-name", "--settings", settings}, "t-named-separator", []string{"--dangerously-skip-permissions", "--name", "t-named-separator", "-n", "inner-name", "--settings", settings}},
-		{"agent-only-name", []string{"codex", "--", "--name", "inner-name"}, "", []string{"--no-daemon", "--name", "inner-name"}},
+		{"agent-only-name", []string{"codex", "--no-alt-screen", "--", "--name", "inner-name"}, "", []string{"--no-daemon", "--no-alt-screen", "--name", "inner-name"}},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
-			if tc.title == "codex-native" {
-				t.Setenv("QUACK_CODEX_NATIVE", "1")
+			if tc.title != "codex" {
+				t.Setenv("QUACK_CODEX_NATIVE", "0")
 			}
 			if err := os.Remove(output); err != nil && !os.IsNotExist(err) {
 				t.Fatal(err)

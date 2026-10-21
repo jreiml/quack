@@ -10,7 +10,7 @@ const usage = `quack: share a terminal or pair Claude/Codex agents, peer-to-peer
 Sessions. These take over the terminal, so run them yourself:
   quack new [-n name] [-- cmd]        run cmd (default $SHELL) in a new session
   quack claude [-n name] [args...]    Claude with --dangerously-skip-permissions
-  quack codex [-n name] [args...]     Codex with --no-daemon (QUACK_CODEX_NATIVE=1: own app server)
+  quack codex [-n name] [args...]     Codex on its own app server (QUACK_CODEX_NATIVE=0: --no-daemon)
       --detach                        start in the background and print the name
       no terminal, inside a session, -p, exec, review, mcp, ...: run the agent directly
   quack ls                            list sessions and agent hosts

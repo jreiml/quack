@@ -52,7 +52,10 @@ alias claude='quack claude'
 alias codex='quack codex'
 ```
 
-`Ctrl-Q` opens the menu and `Ctrl-Q q` detaches. `quack ls`, `quack attach`,
+`Ctrl-Q` opens the menu and `Ctrl-Q q` detaches. The mouse wheel scrolls back
+through the session's output (`q` or scrolling to the bottom returns), and dragging
+selects and copies; hold Shift (Option in some terminals) for the terminal's own
+selection. Codex runs with `--no-alt-screen` so its transcript stays in the scrollback. `quack ls`, `quack attach`,
 `quack detach` and `quack stop` manage sessions. Without a name they use the
 current session, then the only one, then ask.
 
@@ -145,21 +148,22 @@ approve it. To deliver them without asking, start that Claude with
 your other sessions** to accept in `/config` for every session. Either accepts
 messages from all your other sessions, not just quack.
 
-**Codex.** quack needs `codex queue` (tested with 0.156.1) and a CLI session.
-A pairing belongs to the thread, so switching threads ends it. Messages arrive
-as queued input: an idle Codex starts a turn, a busy one reads them afterwards.
-`quack codex` runs `codex --no-daemon`; a plain `codex` on the shared daemon can
-pair too by running `quack invite` or `quack pair` itself. A brand-new Codex
-gets its first message through its queue database, which needs `sqlite3`;
-otherwise message it once before pairing.
-
-Native messages are opt-in with `QUACK_CODEX_NATIVE=1`: `quack codex` then runs
-Codex on its own app server, and a plain `codex` pairs natively when its
-`quack invite` or `quack pair` sees the variable. They arrive the way Codex's own
+**Codex.** `quack codex` runs Codex on its own app server (tested with
+0.163.0) and passes `-c`, `--enable` and `--disable` to the server too;
+`--profile` isn't supported. Messages arrive the way Codex's own
 `send_message_to_thread` delivers them, shown as "Sent by Codex from task <peer>
 via quack": an idle Codex starts a turn at once, a busy one reads them in its
-current turn. `quack codex` passes `-c`, `--enable` and `--disable` to the app
-server too; `--profile` isn't supported.
+current turn. The app server's socket is in `QUACK_CODEX_SOCKET`, so other
+tools in the session can deliver the same way. A pairing belongs to the thread,
+so switching threads ends it.
+
+With `QUACK_CODEX_NATIVE=0`, `quack codex` runs `codex --no-daemon` instead and
+messages go through `codex queue`: a busy Codex reads them only after its turn,
+which for a long `/goal` can be hours. A plain `codex` can pair too by running
+`quack invite` or `quack pair` itself; it gets native messages when it runs on
+the shared app-server daemon, otherwise queued ones. A brand-new Codex gets its
+first queued message through its queue database, which needs `sqlite3`;
+otherwise message it once before pairing.
 
 In Codex's sandbox, `quack send` works but `quack pair`, `quack unpair` and
 `quack invite` don't, so run them with escalated permissions or type them with

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,6 +43,15 @@ var errNotCodex = errors.New("not a Codex process")
 var errAgentGone = errors.New("agent ended")
 
 var delegationEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+func codexNative() bool { return os.Getenv("QUACK_CODEX_NATIVE") != "0" }
+
+func inline(args []string) []string {
+	if slices.Contains(args, "--no-alt-screen") {
+		return nil
+	}
+	return []string{"--no-alt-screen"}
+}
 
 func codexHome() string {
 	if home := os.Getenv("CODEX_HOME"); home != "" {
@@ -178,7 +188,7 @@ func codexSocket(pid int, home string) (string, error) {
 		return "", err
 	}
 	paths := []string{codexSocketPath(parent)}
-	if os.Getenv("QUACK_CODEX_NATIVE") == "1" {
+	if codexNative() {
 		paths = append(paths, filepath.Join(home, "app-server-control", "app-server-control.sock"))
 	}
 	for _, path := range paths {
@@ -530,7 +540,7 @@ func codexServerArgs(args []string) []string {
 		name, _, inline := strings.Cut(arg, "=")
 		switch {
 		case name == "-p" || name == "--profile" || strings.HasPrefix(arg, "-p") && len(arg) > 2 && !strings.HasPrefix(arg, "--"):
-			fatalf("QUACK_CODEX_NATIVE=1 can't use a Codex profile: the app server takes no --profile; pass its settings with -c")
+			fatalf("quack codex can't use a Codex profile: the app server takes no --profile; pass its settings with -c, or run with QUACK_CODEX_NATIVE=0")
 		case name == "-c" || name == "--config" || name == "--enable" || name == "--disable":
 			if inline {
 				out = append(out, arg)
@@ -555,6 +565,7 @@ func cmdCodex(args []string) {
 		fatalf("%v", err)
 	}
 	server := exec.Command(bin, append([]string{"app-server", "--listen", "unix://" + socket}, codexServerArgs(args)...)...)
+	server.Env = append(os.Environ(), "QUACK_CODEX_SOCKET="+socket)
 	server.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
@@ -592,7 +603,7 @@ func cmdCodex(args []string) {
 			fatalf("Codex app server did not listen on %s", socket)
 		}
 	}
-	tui := exec.Command(bin, append([]string{"--remote", "unix://" + socket}, args...)...)
+	tui := exec.Command(bin, append(append([]string{"--remote", "unix://" + socket}, inline(args)...), args...)...)
 	tui.Stdin, tui.Stdout, tui.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := tui.Start(); err != nil {
 		stop()

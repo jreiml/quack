@@ -20,8 +20,9 @@ needed, `quack pair` prints a two-word code for the host to check.
   approval, or `--auto-approve --limit N` for more guests. It works in any
   local Claude Code, or in a Codex CLI session that owns its thread, without a
   quack session. Inside a quack session the human can also use `Ctrl-Q c`.
-- Desktop, App Server and shared-daemon Codex sessions can't pair; `quack codex`
-  or `codex --no-daemon` can.
+- Desktop Codex can't pair; `quack codex`, `codex --no-daemon` and the CLI on
+  the shared daemon can. Under `quack codex`, peer messages reach a busy Codex
+  in its current turn.
 - `quack new`, `quack claude` and `quack codex` attach a terminal, so the human
   runs them. From a shell tool they need `--detach`; without it, `quack claude`
   and `quack codex` just run the agent directly, with no session.
