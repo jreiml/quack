@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sort"
@@ -304,6 +305,10 @@ func cmdGate(args []string) {
 	}
 	attach := s.cmd("attach-session", "-t", "=main")
 	attach.Stdin, attach.Stdout, attach.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if name := os.Getenv("TERM"); !hasTerminfo(name) {
+		logger.Printf("%s's terminal %q has no terminfo here, using xterm-256color", who, name)
+		attach.Env = append(os.Environ(), "TERM=xterm-256color")
+	}
 	if err := attach.Run(); err != nil {
 		logger.Printf("%s attach: %v", who, err)
 	}
@@ -419,4 +424,26 @@ func cmdDecline(args []string) {
 	}
 	decline(e)
 	fmt.Fprintf(os.Stderr, "turned %s away from %s\n", e.name, e.s.hostName())
+}
+
+func hasTerminfo(name string) bool {
+	if name == "" || strings.ContainsAny(name, "/.") {
+		return false
+	}
+	dirs := filepath.SplitList(os.Getenv("TERMINFO_DIRS"))
+	if dir := os.Getenv("TERMINFO"); dir != "" {
+		dirs = append([]string{dir}, dirs...)
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".terminfo"))
+	}
+	dirs = append(dirs, "/etc/terminfo", "/lib/terminfo", "/usr/share/terminfo", "/usr/lib/terminfo", "/opt/homebrew/share/terminfo")
+	for _, dir := range dirs {
+		for _, sub := range []string{name[:1], fmt.Sprintf("%x", name[0])} {
+			if _, err := os.Stat(filepath.Join(dir, sub, name)); err == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
