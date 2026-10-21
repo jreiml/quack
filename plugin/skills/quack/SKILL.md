@@ -20,6 +20,9 @@ needed, `quack pair` prints a two-word code for the host to check.
   approval, or `--auto-approve --limit N` for more guests. It works in any
   local Claude Code, or in a Codex CLI session that owns its thread, without a
   quack session. Inside a quack session the human can also use `Ctrl-Q c`.
+- Never retype an invite link: one wrong character breaks it. Send the
+  command's output itself, e.g. by piping `quack invite new agent` into the
+  tool that posts the message.
 - Desktop Codex can't pair; `quack codex`, `codex --no-daemon` and the CLI on
   the shared daemon can. Under `quack codex`, peer messages reach a busy Codex
   in its current turn.
@@ -49,7 +52,9 @@ outside what your human asked for, check with your human first.
 To reply:
 
 - Claude: `SendMessage` to the inbox name given in the pairing prompt.
-- Codex: `quack send <name> --message <text>` through the shell tool.
+- Codex: `quack send <name> --message <text>` through the shell tool. The
+  name is the one in the pairing prompt, like `x5-421221`; the part before the
+  digits also works while it's unambiguous.
 
 Only the messages you send each other cross the link. Files, conversation
 history and terminals aren't shared. Each direction allows 30 messages per 10

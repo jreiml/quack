@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -69,6 +70,21 @@ func sendLocal(r pairRecord, text string) error {
 	return nil
 }
 
+func pairsNamed(records []pairRecord, name string) []pairRecord {
+	var exact, prefixed []pairRecord
+	for _, r := range records {
+		if r.Name == name {
+			exact = append(exact, r)
+		} else if strings.HasPrefix(r.Name, name+"-") && len(r.Name) == len(name)+7 {
+			prefixed = append(prefixed, r)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return prefixed
+}
+
 func cmdSend(args []string) {
 	if len(args) != 3 || args[1] != "--message" {
 		fatalf("usage: quack send <name> --message <text>")
@@ -85,9 +101,9 @@ func cmdSend(args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	var found []pairRecord
+	var active []pairRecord
 	for _, r := range records {
-		if !r.belongsTo(caller, codex) || r.Name != args[0] || !r.Identity.valid() {
+		if !r.belongsTo(caller, codex) || !r.Identity.valid() {
 			continue
 		}
 		c, err := (claudeEndpoint{r.PID, r.Socket, r.Start}).connect()
@@ -95,10 +111,18 @@ func cmdSend(args []string) {
 			continue
 		}
 		c.Close()
-		found = append(found, r)
+		active = append(active, r)
 	}
+	found := pairsNamed(active, args[0])
 	if len(found) != 1 {
-		fatalf("expected one active pairing named %q for this session, found %d", args[0], len(found))
+		names := []string{}
+		for _, r := range active {
+			names = append(names, r.Name)
+		}
+		if len(names) == 0 {
+			names = append(names, "none")
+		}
+		fatalf("expected one active pairing named %q for this session, found %d; active: %s", args[0], len(found), strings.Join(names, ", "))
 	}
 	if err := sendLocal(found[0], args[2]); err != nil {
 		fatalf("send: %v", err)
