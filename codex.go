@@ -179,15 +179,20 @@ func codexSocketPath(host int) string {
 }
 
 func codexSocket(pid int, home string) (string, error) {
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
-	if err != nil {
-		return "", fmt.Errorf("process %d: %w", pid, err)
-	}
-	parent, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	parents, err := processParents()
 	if err != nil {
 		return "", err
 	}
-	paths := []string{codexSocketPath(parent)}
+	return codexSocketWithParents(pid, home, parents)
+}
+
+func codexSocketWithParents(pid int, home string, parents map[int]int) (string, error) {
+	var paths []string
+	// npm and other launchers can sit between Quack and the native Codex
+	// process. Ancestors only locate candidates; socketPeer verifies ownership.
+	for parent, n := parents[pid], 0; parent > 1 && n < 64; parent, n = parents[parent], n+1 {
+		paths = append(paths, codexSocketPath(parent))
+	}
 	if codexNative() {
 		paths = append(paths, filepath.Join(home, "app-server-control", "app-server-control.sock"))
 	}
@@ -291,6 +296,15 @@ func (a codexEndpoint) alive() error {
 func (a codexEndpoint) send(name, text string) error {
 	if err := a.alive(); err != nil {
 		return err
+	}
+	if a.Socket == "" {
+		// A pinned endpoint may predate the native socket becoming available.
+		// Rediscover before queueing so that stale metadata cannot force delays.
+		var err error
+		a.Socket, err = codexSocket(a.PID, a.Home)
+		if err != nil {
+			return err
+		}
 	}
 	body := fmt.Sprintf("Peer message from %s via quack.\n\n%s", name, text)
 	if a.Socket != "" {

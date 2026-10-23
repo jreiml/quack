@@ -676,6 +676,77 @@ func TestCodexSocket(t *testing.T) {
 	}
 }
 
+func TestCodexSocketThroughLauncher(t *testing.T) {
+	home := shortHome(t)
+	t.Setenv("TMUX_TMPDIR", home)
+	t.Setenv("QUACK_CODEX_NATIVE", "0")
+	// The native process has a launcher parent and a Quack grandparent.
+	parents := map[int]int{os.Getpid(): 910001, 910001: 910002, 910002: 1}
+	path := codexSocketPath(910002)
+	fakeAppServer(t, path, func(string, json.RawMessage) any { return map[string]any{} })
+	if got, err := codexSocketWithParents(os.Getpid(), home, parents); err != nil || got != path {
+		t.Fatalf("launcher discovery = %q, %v; want %q", got, err, path)
+	}
+	// An ancestor's candidate socket still must belong to the native process.
+	parents[os.Getppid()] = 910001
+	if got, err := codexSocketWithParents(os.Getppid(), home, parents); err != nil || got != "" {
+		t.Fatalf("accepted another process's socket: %q, %v", got, err)
+	}
+	// An unrelated socket in the same directory is not a candidate.
+	delete(parents, 910001)
+	if got, err := codexSocketWithParents(os.Getpid(), home, parents); err != nil || got != "" {
+		t.Fatalf("accepted unrelated socket: %q, %v", got, err)
+	}
+}
+
+func TestCodexSendRefreshesSocketlessEndpoint(t *testing.T) {
+	home := shortHome(t)
+	var err error
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_TMPDIR", home)
+	t.Setenv("QUACK_CODEX_NATIVE", "")
+	thread := randomID()
+	dir := filepath.Join(home, "thread-writer-locks")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.Create(filepath.Join(dir, thread+".lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	start, err := processStart(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := codexEndpoint{PID: os.Getpid(), Start: start, Thread: thread, Home: home}
+	turns := make(chan json.RawMessage, 2)
+	fakeAppServer(t, filepath.Join(home, "app-server-control", "app-server-control.sock"), func(method string, params json.RawMessage) any {
+		if method == "turn/start" {
+			turns <- params
+		}
+		return map[string]any{}
+	})
+	// The captured endpoint has no socket or queue binary; both sends must
+	// discover the new native socket rather than attempt the queue fallback.
+	for range 2 {
+		if err := a.send("peer", "hello"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case params := <-turns:
+			if !strings.Contains(string(params), thread) || !strings.Contains(string(params), "hello") {
+				t.Fatalf("unexpected turn: %s", params)
+			}
+		default:
+			t.Fatal("message was not delegated to the native socket")
+		}
+	}
+}
+
 func TestCodexDelegate(t *testing.T) {
 	path := filepath.Join(shortHome(t), "codex.sock")
 	a := codexEndpoint{PID: os.Getpid(), Thread: "01a0d91c-587a-7c50-a95a-ce1b3091326d", Socket: path}
