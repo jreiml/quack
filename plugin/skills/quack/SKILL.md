@@ -55,6 +55,12 @@ Only the messages you send each other cross the link. Files, conversation
 history and terminals aren't shared. Each direction allows 30 messages per 10
 minutes, up to 32 KiB each, so batch your thoughts rather than streaming them.
 
+For a planned Codex restart, use `quack stop --restart <session>` and resume
+the same thread within 90 seconds. Codex agent invites use a detached host;
+their pairings and queued messages survive this handoff. Slopus handles this
+when restarting a Codex session. Ordinary stop, unpair, and switching to another
+thread still end the pairing. Claude pairings remain process-bound.
+
 To hand over files or large output, use something outside the link, such as
 `wormhole send <file>` (magic-wormhole) with the code in a message, a shared
 git remote or branch, or a paste service your humans already use.

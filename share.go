@@ -200,10 +200,10 @@ func cmdInviteNew(args []string) {
 
 func agentInviteHost(args []string) host {
 	if len(args) > 0 {
-		return targetHost(args)
+		return detachedCodexHost(targetHost(args))
 	}
 	if s, ok := currentSession(); ok {
-		return s
+		return detachedCodexHost(s)
 	}
 	command := strings.Join(append([]string{"quack"}, os.Args[1:]...), " ")
 	refuseCodexSandbox(nil, command)
@@ -219,6 +219,19 @@ func agentInviteHost(args []string) host {
 		return h
 	}
 	return newAgentHost(a, codex)
+}
+
+func detachedCodexHost(h host) host {
+	if s, ok := h.(server); ok {
+		_, codex, err := s.agent()
+		if err == nil && codex != nil {
+			if pinned, ok := agentHostFor(claudeEndpoint{}, codex); ok {
+				return pinned
+			}
+			return newAgentHost(claudeEndpoint{}, codex)
+		}
+	}
+	return h
 }
 
 func printInvite(h host, i invite) {

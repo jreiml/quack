@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func inviteLinkForTest(t *testing.T, s server, kind string) string {
+func inviteLinkForTest(t *testing.T, s host, kind string) string {
 	t.Helper()
 	is := invites(s)
 	for n := len(is) - 1; n >= 0; n-- {

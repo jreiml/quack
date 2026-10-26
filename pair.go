@@ -244,6 +244,7 @@ type pairLink struct {
 	dropped                    func()
 	state                      func(string)
 	outbox                     []pairFrame
+	pending                    []pairFrame
 	sent, delivered            int64
 	offline                    time.Time
 	outbound, inbound          pairRate
@@ -335,6 +336,9 @@ func (l *pairLink) run(ctx context.Context, conns <-chan pairConn, check func() 
 				}
 				return "The peer's Claude exited."
 			}
+			if reason := l.deliverPending(); reason != "" {
+				return reason
+			}
 			if check != nil {
 				if reason := check(); reason != "" {
 					return reason
@@ -397,21 +401,46 @@ func (l *pairLink) receive(f pairFrame) string {
 			l.wire.send(pairFrame{Type: "ack", Seq: f.Seq})
 			return ""
 		}
-		if f.Seq != l.delivered+1 {
+		if f.Seq <= l.delivered+int64(len(l.pending)) {
+			return ""
+		}
+		if f.Seq != l.delivered+int64(len(l.pending))+1 {
 			return "The peer sent messages out of order."
 		}
+		if len(l.pending) >= pairOutboxLimit {
+			return "The peer sent too many messages while the agent was restarting."
+		}
+		l.pending = append(l.pending, f)
+		return l.deliverPending()
+	default:
+		return "The peer sent an unsupported pair frame."
+	}
+	return ""
+}
+
+func (l *pairLink) deliverPending() string {
+	for len(l.pending) > 0 {
+		if l.b.record.Codex != nil {
+			if _, err := l.b.record.Codex.resumed(); errors.Is(err, errAgentRestarting) {
+				return ""
+			}
+		}
+		f := l.pending[0]
 		if l.inbound.take(time.Now(), 60) {
 			if err := l.b.record.send(l.b.record.Identity.label(), f.Text); err != nil {
 				l.b.logger.Printf("pair delivery: %v", err)
 				return "The peer's agent became unavailable."
 			}
 		} else {
-			l.wire.send(pairFrame{Type: "limit"})
+			if l.wire != nil {
+				l.wire.send(pairFrame{Type: "limit"})
+			}
 		}
 		l.delivered = f.Seq
-		l.wire.send(pairFrame{Type: "ack", Seq: f.Seq})
-	default:
-		return "The peer sent an unsupported pair frame."
+		l.pending = slices.Delete(l.pending, 0, 1)
+		if l.wire != nil {
+			l.wire.send(pairFrame{Type: "ack", Seq: f.Seq})
+		}
 	}
 	return ""
 }

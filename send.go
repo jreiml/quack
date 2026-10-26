@@ -10,7 +10,11 @@ import (
 
 func (r pairRecord) belongsTo(claude claudeEndpoint, codex *codexEndpoint) bool {
 	if codex != nil {
-		return r.Codex != nil && r.Codex.PID == codex.PID && r.Codex.Start == codex.Start && r.Codex.Thread == codex.Thread && r.Codex.Home == codex.Home
+		if r.Codex == nil {
+			return false
+		}
+		a, err := r.Codex.resumed()
+		return err == nil && a.PID == codex.PID && a.Start == codex.Start && a.Thread == codex.Thread && a.Home == codex.Home
 	}
 	return r.Codex == nil && r.Claude == claude
 }

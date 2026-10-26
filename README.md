@@ -162,6 +162,13 @@ current turn. The app server's socket is in `QUACK_CODEX_SOCKET`, so other
 tools in the session can deliver the same way. A pairing belongs to the thread,
 so switching threads ends it.
 
+For a planned Codex restart, `quack stop --restart <session>` preserves the
+pairing while the same thread resumes within 90 seconds. Codex agent invites
+run their sharing process independently of the terminal. Messages received
+during the restart are held and delivered
+once after resume. Slopus uses this handoff automatically; ordinary stop and
+unpair still end the pairing. Claude pairings remain tied to their process.
+
 With `QUACK_CODEX_NATIVE=0`, `quack codex` runs `codex --no-daemon` instead and
 messages go through `codex queue`: a busy Codex reads them only after its turn,
 which for a long `/goal` can be hours. A plain `codex` can pair too by running

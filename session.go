@@ -288,7 +288,22 @@ func cmdDetach(args []string) {
 }
 
 func cmdStop(args []string) {
+	restarting := len(args) > 0 && args[0] == "--restart"
+	if restarting {
+		args = args[1:]
+	}
 	s := target(args, true)
+	if restarting {
+		_, codex, err := s.agent()
+		if err != nil {
+			fatalf("preparing restart: %v", err)
+		}
+		if codex != nil {
+			if err := codex.saveRestart(codexRestart{*codex, time.Now().Add(90 * time.Second)}); err != nil {
+				fatalf("preparing restart: %v", err)
+			}
+		}
+	}
 	s.must("kill-server")
 	fmt.Fprintf(os.Stderr, "stopped %s\n", s.name)
 }

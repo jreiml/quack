@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -41,7 +42,10 @@ func fakeCodex() {
 		f.Close()
 		return
 	}
-	thread := randomID()
+	thread := os.Getenv("QUACK_PAIR_THREAD")
+	if thread == "" {
+		thread = randomID()
+	}
 	if err := os.Setenv("CODEX_THREAD_ID", thread); err != nil {
 		panic(err)
 	}
@@ -353,6 +357,7 @@ func TestNetCodexPair(t *testing.T) {
 			root := fakeSetup(t)
 			writeNativeClaudeRecord(t)
 			fakeBin := fakeCodexBinary(t, root)
+			var pairingHost host
 			var host, guest fakeClaudeInfo
 			var s server
 			if codexHost {
@@ -396,10 +401,11 @@ func TestNetCodexPair(t *testing.T) {
 				}
 			}()
 			quack(t, "invite", "new", "agent", "--auto-approve", "-n", s.name)
-			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, s, "pair")})
+			pairingHost = detachedCodexHost(s)
+			result := fakeCall(t, guest, fakeClaudeCommand{Action: "pair", Address: inviteLinkForTest(t, pairingHost, "pair")})
 			var hostName, guestName string
 			eventually(t, "pair ready", func() bool {
-				if len(pairs(s)) != 1 || pairs(s)[0].state != "active" {
+				if len(pairs(pairingHost)) != 1 || pairs(pairingHost)[0].state != "active" {
 					return false
 				}
 				records, err := readPairRecords()
@@ -450,7 +456,7 @@ func TestNetCodexPair(t *testing.T) {
 			fakeCall(t, host, fakeClaudeCommand{Action: "send", Address: hostName, Text: "host-to-guest-codex"})
 			eventually(t, "host delivery", func() bool { return hasFakeMessage(t, guest, "host-to-guest-codex") })
 			fakeCall(t, guest, fakeClaudeCommand{Action: "unpair", Address: guestName})
-			eventually(t, "pair disconnected", func() bool { return len(pairs(s)) == 0 })
+			eventually(t, "pair disconnected", func() bool { return len(pairs(pairingHost)) == 0 })
 			eventually(t, "ending notice", func() bool { return hasFakeMessage(t, host, "ended") })
 			eventually(t, "Codex inbox cleanup", func() bool {
 				paths, err := filepath.Glob(filepath.Join(root, "*-codex-home", "quack-pairs", "*"))
@@ -894,6 +900,60 @@ func TestCodexWrapperStopsServerOnSignalDuringStartup(t *testing.T) {
 		syscall.Kill(pid, syscall.SIGKILL)
 		t.Fatalf("app server %d survived: %v", pid, err)
 	}
+}
+
+func wrapperNativeChild() {
+	signal.Ignore(syscall.SIGTERM)
+	root := os.Getenv("QUACK_TEST_DIR")
+	lock, err := os.Create(filepath.Join(root, "writer.lock"))
+	if err != nil {
+		panic(err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "child.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		panic(err)
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func TestCodexWrapperStopsNativeChild(t *testing.T) {
+	root := wrapperCodex(t, `trap 'exit 0' TERM
+QUACK_WRAPPER_CHILD=1 "$QUACK_TEST_HELPER_BIN" &
+while [ ! -f "$QUACK_TEST_DIR/child.pid" ]; do sleep 0.01; done
+: > "${3#unix://}"
+wait`)
+	helper, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("QUACK_TEST_HELPER_BIN", helper)
+	cmd := exec.Command(bin, "_codex")
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Fatalf("wrapper: %s %v", out, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	lock, err := os.OpenFile(filepath.Join(root, "writer.lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	eventually(t, "native child writer lock released", func() bool {
+		return syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+	})
 }
 
 func TestCodexArgs(t *testing.T) {

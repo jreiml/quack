@@ -113,6 +113,10 @@ func TestInputFilter(t *testing.T) {
 var bin string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("QUACK_WRAPPER_CHILD") == "1" {
+		wrapperNativeChild()
+		return
+	}
 	if os.Getenv("QUACK_CODEX_HELPER") == "1" || len(os.Args) > 1 && os.Args[1] == "queue" {
 		fakeCodex()
 		return

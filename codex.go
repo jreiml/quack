@@ -462,11 +462,24 @@ func agentSessionIdentity(a claudeEndpoint, c *codexEndpoint, owner string) (age
 	return sessionIdentity(a, owner)
 }
 
-func (r *pairRecord) alive() error { return endpointAlive(r.Claude, r.Codex) }
+func (r *pairRecord) alive() error {
+	if r.Codex != nil {
+		_, err := r.Codex.resumed()
+		if errors.Is(err, errAgentRestarting) {
+			return nil
+		}
+		return err
+	}
+	return endpointAlive(r.Claude, nil)
+}
 
 func (r pairRecord) send(name, text string) error {
 	if r.Codex != nil {
-		return r.Codex.send(name, text)
+		a, err := r.Codex.resumed()
+		if err != nil {
+			return err
+		}
+		return a.send(name, text)
 	}
 	return r.Claude.send(r.Socket, name, text)
 }
@@ -643,13 +656,14 @@ func cmdCodex(args []string) {
 	exited := make(chan error, 1)
 	go func() { exited <- server.Wait() }()
 	stop := func() {
-		server.Process.Signal(syscall.SIGTERM)
+		syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-exited:
 		case <-time.After(5 * time.Second):
-			server.Process.Kill()
+			syscall.Kill(-server.Process.Pid, syscall.SIGKILL)
 			<-exited
 		}
+		syscall.Kill(-server.Process.Pid, syscall.SIGKILL)
 		if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "quack: %v\n", err)
 		}

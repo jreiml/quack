@@ -139,6 +139,10 @@ func (a agentHost) alive() bool {
 	if err != nil {
 		return false
 	}
+	if p.Codex != nil {
+		_, err := p.Codex.resumed()
+		return err == nil || errors.Is(err, errAgentRestarting)
+	}
 	pid, start := p.pid()
 	return processRunning(pid, start)
 }
@@ -147,6 +151,10 @@ func (a agentHost) agent() (claudeEndpoint, *codexEndpoint, error) {
 	p, err := a.pinned()
 	if err != nil {
 		return claudeEndpoint{}, nil, err
+	}
+	if p.Codex != nil {
+		endpoint, err := p.Codex.resumed()
+		return claudeEndpoint{}, &endpoint, err
 	}
 	if err := endpointAlive(p.Claude, p.Codex); err != nil {
 		return claudeEndpoint{}, nil, err
@@ -254,6 +262,12 @@ func agentHostFor(a claudeEndpoint, codex *codexEndpoint) (agentHost, bool) {
 		p, err := h.pinned()
 		if err != nil {
 			continue
+		}
+		if codex != nil && p.Codex != nil {
+			endpoint, err := p.Codex.resumed()
+			if err == nil && endpoint.PID == codex.PID && endpoint.Start == codex.Start && endpoint.Thread == codex.Thread && endpoint.Home == codex.Home {
+				return h, true
+			}
 		}
 		if codex != nil && p.Codex != nil && *p.Codex == *codex || codex == nil && p.Codex == nil && p.Claude == a {
 			return h, true

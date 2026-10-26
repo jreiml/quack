@@ -572,7 +572,8 @@ func (b *pairInbox) receive(c net.Conn) {
 			continue
 		}
 		if b.record.Codex != nil {
-			if err := b.record.alive(); err != nil {
+			endpoint, err := b.record.Codex.resumed()
+			if err != nil {
 				return
 			}
 			parents, err := processParents()
@@ -580,7 +581,7 @@ func (b *pairInbox) receive(c net.Conn) {
 				b.logger.Printf("send credentials: %v", err)
 				return
 			}
-			if !hasPID || !descendsFrom(pid, b.record.Codex.PID, parents) || f.Session != b.record.Codex.Thread {
+			if !hasPID || !descendsFrom(pid, endpoint.PID, parents) || f.Session != endpoint.Thread {
 				return
 			}
 		} else if !hasPID || pid != b.record.Claude.PID {

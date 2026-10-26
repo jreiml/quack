@@ -15,6 +15,7 @@ Sessions. These take over the terminal, so run them yourself:
       no terminal, inside a session, -p, exec, review, mcp, ...: run the agent directly
   quack ls                            list sessions and agent hosts
   quack attach|detach|stop [name]     reattach, detach your terminals, or end a session
+  quack stop --restart [name]        preserve Codex pairings for a same-thread resume within 90s
 
 Invites. -n picks the session; otherwise the current one, the only one, or ask:
   quack invite new terminal|agent     create and copy a one-use invite that needs no approval
