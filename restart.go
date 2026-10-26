@@ -62,6 +62,7 @@ func (a codexEndpoint) resumed() (codexEndpoint, error) {
 	if readErr != nil || json.Unmarshal(raw, &state) != nil || state.Endpoint.Home != a.Home || state.Endpoint.Thread != a.Thread {
 		return a, err
 	}
+	state.Endpoint.Exclusive = a.Exclusive
 	if state.Endpoint.alive() == nil {
 		return state.Endpoint, nil
 	}
@@ -84,6 +85,10 @@ func (a codexEndpoint) resumed() (codexEndpoint, error) {
 		}
 		next, findErr := codexAt(pid, a.Thread)
 		if findErr != nil || next.Home != a.Home {
+			continue
+		}
+		next.Exclusive = a.Exclusive
+		if next.alive() != nil {
 			continue
 		}
 		if found != nil {

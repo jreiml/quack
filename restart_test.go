@@ -34,6 +34,7 @@ func TestCodexRestartHandoff(t *testing.T) {
 		return cmd, endpoint
 	}
 	old, endpoint := start()
+	endpoint.Exclusive = true
 	host := newAgentHost(claudeEndpoint{}, endpoint)
 	record := pairRecord{Codex: endpoint}
 	if err := endpoint.saveRestart(codexRestart{*endpoint, time.Now().Add(90 * time.Second)}); err != nil {
@@ -61,7 +62,7 @@ func TestCodexRestartHandoff(t *testing.T) {
 	}
 	nextProcess, resumed := start()
 	current, err := endpoint.resumed()
-	if err != nil || current.PID != resumed.PID || current.Start != resumed.Start {
+	if err != nil || current.PID != resumed.PID || current.Start != resumed.Start || !current.Exclusive {
 		t.Fatalf("resumed endpoint: %+v %v", current, err)
 	}
 	if !record.belongsTo(claudeEndpoint{}, resumed) {
