@@ -19,6 +19,60 @@ type codexRestart struct {
 	Until    time.Time     `json:"until"`
 }
 
+func (s server) restartAgents() ([]codexEndpoint, error) {
+	panes, err := s.run("list-panes", "-t", "=main", "-F", "#{pane_pid}")
+	if err != nil {
+		return nil, err
+	}
+	parents, err := processParents()
+	if err != nil {
+		return nil, err
+	}
+	found := map[string]codexEndpoint{}
+	for pid := range parents {
+		inside := false
+		for _, pane := range strings.Fields(panes) {
+			root, err := strconv.Atoi(pane)
+			if err != nil {
+				return nil, err
+			}
+			inside = inside || descendsFrom(pid, root, parents)
+		}
+		if !inside {
+			continue
+		}
+		paths, err := processFiles(pid)
+		if err != nil {
+			continue
+		}
+		for thread := range codexThreads(paths) {
+			endpoint, err := codexAt(pid, thread)
+			if err != nil {
+				continue
+			}
+			key := endpoint.Home + "\x00" + endpoint.Thread
+			if previous, ok := found[key]; ok && previous.PID != endpoint.PID {
+				return nil, fmt.Errorf("multiple processes own Codex thread %s", thread)
+			}
+			found[key] = *endpoint
+		}
+	}
+	if len(found) == 0 {
+		_, endpoint, err := s.agent()
+		if err != nil {
+			return nil, err
+		}
+		if endpoint != nil {
+			return []codexEndpoint{*endpoint}, nil
+		}
+	}
+	agents := make([]codexEndpoint, 0, len(found))
+	for _, endpoint := range found {
+		agents = append(agents, endpoint)
+	}
+	return agents, nil
+}
+
 func (a codexEndpoint) restartPath() string {
 	return filepath.Join(a.Home, "quack-restarts", a.Thread+".json")
 }

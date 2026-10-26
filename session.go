@@ -294,12 +294,12 @@ func cmdStop(args []string) {
 	}
 	s := target(args, true)
 	if restarting {
-		_, codex, err := s.agent()
+		agents, err := s.restartAgents()
 		if err != nil {
 			fatalf("preparing restart: %v", err)
 		}
-		if codex != nil {
-			if err := codex.saveRestart(codexRestart{*codex, time.Now().Add(90 * time.Second)}); err != nil {
+		for _, codex := range agents {
+			if err := codex.saveRestart(codexRestart{codex, time.Now().Add(90 * time.Second)}); err != nil {
 				fatalf("preparing restart: %v", err)
 			}
 		}

@@ -113,6 +113,10 @@ func TestInputFilter(t *testing.T) {
 var bin string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("QUACK_INVITE_HOST_PROBE") == "1" {
+		probeAgentInviteHost()
+		return
+	}
 	if os.Getenv("QUACK_WRAPPER_CHILD") == "1" {
 		wrapperNativeChild()
 		return

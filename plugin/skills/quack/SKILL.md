@@ -58,8 +58,14 @@ minutes, up to 32 KiB each, so batch your thoughts rather than streaming them.
 For a planned Codex restart, use `quack stop --restart <session>` and resume
 the same thread within 90 seconds. Codex agent invites use a detached host;
 their pairings and queued messages survive this handoff. Slopus handles this
-when restarting a Codex session. Ordinary stop, unpair, and switching to another
-thread still end the pairing. Claude pairings remain process-bound.
+when restarting a Codex session. Ordinary stop and unpair still end the pairing.
+A pairing stays with its original thread; another thread cannot use it. Claude
+pairings remain process-bound.
+
+Create Codex agent invites from inside the intended conversation. Quack binds
+the invite to that exact thread, including when its app server also hosts
+subagents. Planned stop records each live thread in that terminal separately;
+resuming one thread never redirects another thread's pairing to it.
 
 To hand over files or large output, use something outside the link, such as
 `wormhole send <file>` (magic-wormhole) with the code in a message, a shared

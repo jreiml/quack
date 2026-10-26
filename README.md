@@ -159,8 +159,8 @@ refuses permission overrides when a remote TUI resumes a thread. Messages arrive
 `send_message_to_thread` delivers them, shown as "Sent by Codex from task <peer>
 via quack": an idle Codex starts a turn at once, a busy one reads them in its
 current turn. The app server's socket is in `QUACK_CODEX_SOCKET`, so other
-tools in the session can deliver the same way. A pairing belongs to the thread,
-so switching threads ends it.
+tools in the session can deliver the same way. A pairing belongs to the exact
+thread: other loaded conversations cannot use it, and closing that thread ends it.
 
 For a planned Codex restart, `quack stop --restart <session>` preserves the
 pairing while the same thread resumes within 90 seconds. Codex agent invites
@@ -168,6 +168,11 @@ run their sharing process independently of the terminal. Messages received
 during the restart are held and delivered
 once after resume. Slopus uses this handoff automatically; ordinary stop and
 unpair still end the pairing. Claude pairings remain tied to their process.
+
+An invite created from inside Codex selects the calling conversation even when
+the app server also has subagent threads loaded. Planned restart handoffs keep
+each thread's identity separate; a resumed parent cannot receive its subagent's
+paired messages.
 
 With `QUACK_CODEX_NATIVE=0`, `quack codex` runs `codex --no-daemon` instead and
 messages go through `codex queue`: a busy Codex reads them only after its turn,

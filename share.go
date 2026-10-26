@@ -203,6 +203,18 @@ func agentInviteHost(args []string) host {
 		return detachedCodexHost(targetHost(args))
 	}
 	if s, ok := currentSession(); ok {
+		if os.Getenv("CODEX_THREAD_ID") != "" {
+			_, codex, err := callerAgent()
+			if err != nil {
+				fatalf("pair identity: %v", err)
+			}
+			if codex != nil {
+				if h, ok := agentHostFor(claudeEndpoint{}, codex); ok {
+					return h
+				}
+				return newAgentHost(claudeEndpoint{}, codex)
+			}
+		}
 		return detachedCodexHost(s)
 	}
 	command := strings.Join(append([]string{"quack"}, os.Args[1:]...), " ")

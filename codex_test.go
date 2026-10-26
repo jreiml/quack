@@ -62,6 +62,13 @@ func fakeCodex() {
 		panic(err)
 	}
 	defer lock.Close()
+	if extra := os.Getenv("QUACK_PAIR_EXTRA_THREAD"); extra != "" {
+		second, err := os.Create(filepath.Join(dir, extra+".lock"))
+		if err != nil {
+			panic(err)
+		}
+		defer second.Close()
+	}
 	if os.Getenv("QUACK_CODEX_NO_ROLLOUT") != "1" {
 		writeCodexRollout(home, thread)
 	}
@@ -86,6 +93,14 @@ func fakeCodex() {
 		}
 		result := fakeClaudeResult{}
 		switch cmd.Action {
+		case "invite-host":
+			probe := exec.Command(os.Args[0])
+			probe.Env = append(os.Environ(), "QUACK_INVITE_HOST_PROBE=1")
+			out, err := probe.CombinedOutput()
+			result.Output = string(out)
+			if err != nil {
+				result.Error = err.Error()
+			}
 		case "pair", "unpair", "send":
 			args := []string{cmd.Action}
 			if cmd.Address != "" {

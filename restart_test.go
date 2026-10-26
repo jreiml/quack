@@ -1,15 +1,83 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func probeAgentInviteHost() {
+	h := agentInviteHost(nil)
+	if _, ok := h.(agentHost); !ok {
+		panic("Codex invitation must use a detached host")
+	}
+	fmt.Println(h.hostName())
+}
+
+func TestCodexRestartWithMultipleThreads(t *testing.T) {
+	root := fakeSetup(t)
+	isolateTemp(t)
+	thread, childThread := randomID(), randomID()
+	fakeBin := fakeCodexBinary(t, root)
+	name := quack(t, "new", "-n", "t-multiple-threads", "--", "env", "QUACK_CODEX_HELPER=1", "QUACK_PAIR_LABEL=host", "QUACK_PAIR_THREAD="+thread, "QUACK_PAIR_EXTRA_THREAD="+childThread, fakeBin)
+	s := server{name}
+	defer s.run("kill-server")
+	fake := fakeInfo(t, root, "host")
+	outside := exec.Command(fakeBin)
+	outsideThread := randomID()
+	outside.Env = append(os.Environ(), "QUACK_CODEX_HELPER=1", "QUACK_PAIR_LABEL=outside", "QUACK_PAIR_THREAD="+outsideThread)
+	if err := outside.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { outside.Process.Kill(); outside.Wait() })
+	var outsideEndpoint *codexEndpoint
+	eventually(t, "unrelated Codex thread", func() bool {
+		var err error
+		outsideEndpoint, err = codexAt(outside.Process.Pid, outsideThread)
+		return err == nil
+	})
+	if _, _, err := s.agent(); err == nil {
+		t.Fatal("unscoped discovery unexpectedly selected one of multiple threads")
+	}
+	result := fakeCall(t, fake, fakeClaudeCommand{Action: "invite-host"})
+	if result.Error != "" {
+		t.Fatalf("exact caller invite: %s %s", result.Output, result.Error)
+	}
+	h := agentHost{strings.TrimSpace(result.Output)}
+	_, endpoint, err := h.agent()
+	if err != nil || endpoint == nil || endpoint.Thread != thread || endpoint.Exclusive {
+		t.Fatalf("invite did not bind exact caller: %+v %v", endpoint, err)
+	}
+	agents, err := s.restartAgents()
+	if err != nil || len(agents) != 2 {
+		t.Fatalf("restart endpoints: %+v %v", agents, err)
+	}
+	quack(t, "stop", "--restart", name)
+	if err := outsideEndpoint.alive(); err != nil {
+		t.Fatalf("stopped unrelated Codex: %v", err)
+	}
+	if _, err := os.Stat(outsideEndpoint.restartPath()); !os.IsNotExist(err) {
+		t.Fatal("marked unrelated thread for restart")
+	}
+	for _, agent := range agents {
+		raw, err := os.ReadFile(agent.restartPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var state codexRestart
+		if err := json.Unmarshal(raw, &state); err != nil || state.Endpoint.Thread != agent.Thread || !state.Until.After(time.Now()) {
+			t.Fatalf("thread handoff not saved: %+v %v", state, err)
+		}
+	}
+}
 
 func TestCodexRestartHandoff(t *testing.T) {
 	root := fakeSetup(t)
