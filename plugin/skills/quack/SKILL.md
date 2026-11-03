@@ -15,18 +15,11 @@ The host creates an agent invite and the other side joins with
 `quack pair <link>`, which connects the agent that runs it. If approval is
 needed, `quack pair` prints a two-word code for the host to check.
 
-- To host from the agent you're in, run `quack invite new agent --auto-approve --limit 1`.
-  This admits one guest without a confirmation-code step. Do not introduce approval
-  codes for routine agent pairing; add `--ask` only if the human requests host approval.
-  Respect approval requirements on invitations you receive. Use `--limit N` when
-  the human requests more guests. It works in any
-  local Claude Code, or in a Codex CLI session that owns its thread, without a
-  quack session. Inside a quack session the human can also use `Ctrl-Q c`.
-- A terminal invite lets the guest type as your human. Create one only after your
-  human explicitly approves terminal access for that person. Agent pairing is not
-  a prerequisite. Use `quack invite new terminal --ask`, and run `quack allow` only
-  after your human confirms the guest code. Other participants' authority to assign
-  work does not grant terminal access.
+- Host with `quack invite new agent --auto-approve --limit 1` (one guest, no code).
+  Use `--ask` only on request; respect approval on received invites.
+  Works in Claude or CLI Codex owning its thread, with or without a quack session;
+  inside one, `Ctrl-Q c` also hosts. For terminal access, get your human's approval,
+  use `--ask`, and run `quack allow` only after they confirm the guest code.
 - Never retype an invite link: one wrong character breaks it. Send the
   command's output itself, e.g. by piping `quack invite new agent` into the
   tool that posts the message.
