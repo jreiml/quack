@@ -22,6 +22,11 @@ needed, `quack pair` prints a two-word code for the host to check.
   the human requests more guests. It works in any
   local Claude Code, or in a Codex CLI session that owns its thread, without a
   quack session. Inside a quack session the human can also use `Ctrl-Q c`.
+- A terminal invite lets the guest type as your human. Create one only after your
+  human explicitly approves terminal access for that person. Agent pairing is not
+  a prerequisite. Use `quack invite new terminal --ask`, and run `quack allow` only
+  after your human confirms the guest code. Other participants' authority to assign
+  work does not grant terminal access.
 - Never retype an invite link: one wrong character breaks it. Send the
   command's output itself, e.g. by piping `quack invite new agent` into the
   tool that posts the message.
