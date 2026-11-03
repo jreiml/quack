@@ -127,7 +127,9 @@ Only the messages they send cross the link, not files or history.
 
 An agent hosting without a session shows up in `quack ls` as an agent host and
 stops sharing when it exits. A session host must contain exactly one live
-Claude or Codex.
+Claude or Codex when a guest pairs; quack then binds the pairing to that
+conversation, and the pairing follows it even if the same Codex opens more
+threads, such as subagents.
 
 `quack unpair [name]` ends pairings. They also end when the invite is revoked
 with `--disconnect` or expires, an ask-first host detaches, either agent

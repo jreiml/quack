@@ -50,6 +50,9 @@ func fakeCodex() {
 		panic(err)
 	}
 	home := filepath.Join(root, label+"-codex-home")
+	if shared := os.Getenv("QUACK_PAIR_CODEX_HOME"); shared != "" {
+		home = shared
+	}
 	if err := os.Setenv("CODEX_HOME", home); err != nil {
 		panic(err)
 	}
@@ -817,7 +820,7 @@ func TestCodexDelegateError(t *testing.T) {
 	}
 }
 
-func TestCodexExclusiveEndsOnSecondThread(t *testing.T) {
+func TestCodexExclusiveSurvivesSecondThread(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -835,7 +838,6 @@ func TestCodexExclusiveEndsOnSecondThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
 	a := codexEndpoint{PID: os.Getpid(), Start: start, Thread: thread, Home: home, Exclusive: true}
 	if err := a.alive(); err != nil {
 		t.Fatalf("alive with one thread: %v", err)
@@ -845,12 +847,27 @@ func TestCodexExclusiveEndsOnSecondThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if err := a.alive(); !errors.Is(err, errAgentGone) {
-		t.Fatalf("exclusive alive with two threads = %v, want errAgentGone", err)
-	}
-	a.Exclusive = false
 	if err := a.alive(); err != nil {
-		t.Fatalf("shared alive with two threads: %v", err)
+		t.Fatalf("bound exclusive alive with a second thread = %v", err)
+	}
+	other := a
+	other.Thread = "01a0d96b-5180-70e2-b1be-17fa38627367"
+	if err := other.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("unowned thread alive = %v, want errAgentGone", err)
+	}
+	moved := a
+	moved.Home = t.TempDir()
+	if err := moved.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("thread in another home alive = %v, want errAgentGone", err)
+	}
+	restarted := a
+	restarted.Start = start + "0"
+	if err := restarted.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("different process start alive = %v, want errAgentGone", err)
+	}
+	first.Close()
+	if err := a.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("closed bound thread alive = %v, want errAgentGone", err)
 	}
 }
 

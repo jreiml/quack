@@ -162,3 +162,87 @@ func TestCodexRestartHandoff(t *testing.T) {
 		t.Fatalf("expired handoff resumed: %v", err)
 	}
 }
+
+func TestCodexRestartHandoffBoundExclusiveThread(t *testing.T) {
+	root, err := filepath.EvalSymlinks(fakeSetup(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolateTemp(t)
+	fakeBin := fakeCodexBinary(t, root)
+	home := filepath.Join(root, "shared-codex-home")
+	n := 0
+	start := func(home, thread, extra string) (*exec.Cmd, int) {
+		t.Helper()
+		n++
+		cmd := exec.Command(fakeBin)
+		cmd.Env = append(os.Environ(), "QUACK_CODEX_HELPER=1", fmt.Sprintf("QUACK_PAIR_LABEL=bound%d", n), "QUACK_PAIR_THREAD="+thread)
+		if home != "" {
+			cmd.Env = append(cmd.Env, "QUACK_PAIR_CODEX_HOME="+home)
+		}
+		if extra != "" {
+			cmd.Env = append(cmd.Env, "QUACK_PAIR_EXTRA_THREAD="+extra)
+		}
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+		eventually(t, "fake thread owner", func() bool {
+			_, err := codexAt(cmd.Process.Pid, thread)
+			return err == nil
+		})
+		return cmd, cmd.Process.Pid
+	}
+	handoff := func(thread string, until time.Duration) codexEndpoint {
+		t.Helper()
+		old, pid := start(home, thread, "")
+		endpoint, err := codexAt(pid, "")
+		if err != nil || !endpoint.Exclusive || endpoint.Thread != thread {
+			t.Fatalf("exclusive discovery: %+v %v", endpoint, err)
+		}
+		if err := endpoint.saveRestart(codexRestart{*endpoint, time.Now().Add(until)}); err != nil {
+			t.Fatal(err)
+		}
+		old.Process.Kill()
+		old.Wait()
+		return *endpoint
+	}
+
+	thread := randomID()
+	endpoint := handoff(thread, 90*time.Second)
+	start(filepath.Join(root, "other-codex-home"), thread, "")
+	start(home, randomID(), "")
+	if _, err := endpoint.resumed(); !errors.Is(err, errAgentRestarting) {
+		t.Fatalf("accepted a wrong thread or home: %v", err)
+	}
+	stale := endpoint
+	stale.Start += "0"
+	if err := stale.alive(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("accepted a different process start: %v", err)
+	}
+	_, next := start(home, thread, randomID())
+	current, err := endpoint.resumed()
+	if err != nil || current.PID != next || current.Thread != thread || current.Home != home || !current.Exclusive {
+		t.Fatalf("bound exclusive thread did not resume beside another thread: %+v %v; want PID %d, thread %s, home %q", current, err, next, thread, home)
+	}
+	record := pairRecord{Codex: &endpoint}
+	if err := record.alive(); err != nil {
+		t.Fatalf("resumed pairing ended: %v", err)
+	}
+
+	duplicate := randomID()
+	endpoint = handoff(duplicate, 90*time.Second)
+	start(home, duplicate, "")
+	start(home, duplicate, "")
+	if _, err := endpoint.resumed(); err == nil || !strings.Contains(err.Error(), "multiple processes own resumed Codex thread") {
+		t.Fatalf("accepted a duplicate owner: %v", err)
+	}
+
+	expired := randomID()
+	endpoint = handoff(expired, -time.Second)
+	start(home, expired, randomID())
+	if _, err := endpoint.resumed(); !errors.Is(err, errAgentGone) {
+		t.Fatalf("expired handoff resumed: %v", err)
+	}
+}
