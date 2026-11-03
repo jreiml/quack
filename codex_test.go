@@ -50,6 +50,9 @@ func fakeCodex() {
 		panic(err)
 	}
 	home := filepath.Join(root, label+"-codex-home")
+	if shared := os.Getenv("QUACK_PAIR_CODEX_HOME"); shared != "" {
+		home = shared
+	}
 	if err := os.Setenv("CODEX_HOME", home); err != nil {
 		panic(err)
 	}
