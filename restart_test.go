@@ -164,7 +164,10 @@ func TestCodexRestartHandoff(t *testing.T) {
 }
 
 func TestCodexRestartHandoffBoundExclusiveThread(t *testing.T) {
-	root := fakeSetup(t)
+	root, err := filepath.EvalSymlinks(fakeSetup(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	isolateTemp(t)
 	fakeBin := fakeCodexBinary(t, root)
 	home := filepath.Join(root, "shared-codex-home")
@@ -221,7 +224,7 @@ func TestCodexRestartHandoffBoundExclusiveThread(t *testing.T) {
 	_, next := start(home, thread, randomID())
 	current, err := endpoint.resumed()
 	if err != nil || current.PID != next || current.Thread != thread || current.Home != home || !current.Exclusive {
-		t.Fatalf("bound exclusive thread did not resume beside another thread: %+v %v", current, err)
+		t.Fatalf("bound exclusive thread did not resume beside another thread: %+v %v; want PID %d, thread %s, home %q", current, err, next, thread, home)
 	}
 	record := pairRecord{Codex: &endpoint}
 	if err := record.alive(); err != nil {
