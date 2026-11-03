@@ -287,7 +287,7 @@ func (a codexEndpoint) alive() error {
 		return err
 	}
 	threads := codexThreads(paths)
-	if threads[a.Thread] != a.Home || a.Exclusive && len(threads) != 1 {
+	if threads[a.Thread] != a.Home {
 		return fmt.Errorf("Codex thread is no longer open: %w", errAgentGone)
 	}
 	return nil
